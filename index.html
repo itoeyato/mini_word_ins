@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Poster Editor — Plano de Corte</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0B1929; --panel:#0F2136; --panel2:#12233A; --line:#1E3A54;
+    --cyan:#4FD1E8; --cyan-dim:#2C7A8C; --amber:#F2A65A; --text:#E8F1F5; --muted:#7691A8;
+    --danger:#F2685A;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size:28px 28px;
+    min-height:100vh;
+  }
+  header{
+    padding:14px 16px; border-bottom:1px solid var(--line);
+    background:rgba(11,25,41,0.9); position:sticky; top:0; backdrop-filter:blur(4px); z-index:10;
+    display:flex; justify-content:space-between; align-items:center;
+  }
+  header .eyebrow{
+    font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:0.15em;
+    color:var(--cyan); text-transform:uppercase;
+  }
+  header h1{ margin:2px 0 0; font-size:20px; font-weight:700; letter-spacing:-0.01em; }
+  .history-controls{ display:flex; gap:8px; }
+  .btn-hist{
+    background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    padding:6px 12px; border-radius:4px; font-family:'JetBrains Mono',monospace;
+    font-size:12px; cursor:pointer; transition:all 0.15s ease;
+  }
+  .btn-hist:hover:not(:disabled){ border-color:var(--cyan); color:var(--cyan); }
+  .btn-hist:disabled{ opacity:0.3; cursor:not-allowed; }
+
+  main{ padding:16px; max-width:520px; margin:0 auto; }
+  .panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:4px;
+    padding:14px; margin-bottom:14px; position:relative;
+  }
+  .panel::before{
+    content:attr(data-tag); position:absolute; top:-9px; left:10px;
+    background:var(--bg); padding:0 6px; font-family:'JetBrains Mono',monospace;
+    font-size:10px; letter-spacing:0.1em; color:var(--muted); text-transform:uppercase;
+  }
+  label{ display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  label:first-child{ margin-top:2px; }
+  input[type=number], select{
+    width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--text);
+    padding:9px 10px; border-radius:3px; font-family:'JetBrains Mono',monospace; font-size:14px;
+  }
+  input[type=file]{ width:100%; color:var(--muted); font-size:12px; }
+  .row{ display:flex; gap:10px; }
+  .row > div{ flex:1; }
+  .chiprow{ display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+  .chip{
+    background:var(--panel2); border:1px solid var(--line); color:var(--muted);
+    padding:6px 10px; border-radius:20px; font-size:12px; cursor:pointer;
+    font-family:'JetBrains Mono',monospace;
+  }
+  .chip.active{ border-color:var(--cyan); color:var(--cyan); background:rgba(79,209,232,0.08); }
+  .toggle{ display:flex; gap:6px; margin-top:6px; }
+  .toggle button{
+    flex:1; background:var(--panel2); border:1px solid var(--line); color:var(--muted);
+    padding:9px 4px; border-radius:3px; cursor:pointer; font-size:12.5px; font-family:'Inter';
+  }
+  .toggle button.active{ border-color:var(--cyan); color:var(--cyan); background:rgba(79,209,232,0.08); }
+  canvas#preview{
+    width:100%; display:block; border-radius:3px; background:#08131F;
+  }
+  .dims{
+    font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--cyan);
+    display:grid; grid-template-columns:1fr 1fr; gap:6px 14px; margin-top:12px;
+  }
+  .dims div span{ color:var(--muted); display:block; font-size:10px; text-transform:uppercase; letter-spacing:0.08em; }
+  .warn{
+    margin-top:10px; padding:9px 10px; border:1px solid var(--danger); border-radius:3px;
+    color:var(--danger); font-size:12px; background:rgba(242,104,90,0.08); display:none;
+  }
+  .cta{
+    width:100%; background:var(--cyan); color:#052A33; border:none; padding:14px;
+    border-radius:3px; font-weight:700; font-size:15px; cursor:pointer; margin-top:4px;
+    letter-spacing:0.02em;
+  }
+  .cta.secondary{ background:transparent; color:var(--cyan); border:1px solid var(--cyan); margin-top:8px; }
+  .cta:disabled{ background:var(--line); color:var(--muted); cursor:not-allowed; border-color:var(--line); }
+  .status{ font-family:'JetBrains Mono',monospace; font-size:12px; color:var(--muted); margin-top:8px; text-align:center; }
+  .hint{ font-size:11px; color:var(--muted); margin-top:4px; line-height:1.4; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="eyebrow">Plano de corte · impresión por hojas</div>
+    <h1>Poster Editor</h1>
+  </div>
+  <div class="history-controls">
+    <button id="undoBtn" class="btn-hist" title="Deshacer (Ctrl+Z)" disabled>↶ Deshacer</button>
+    <button id="redoBtn" class="btn-hist" title="Rehacer (Ctrl+Y)" disabled>↷ Rehacer</button>
+  </div>
+</header>
+
+<main>
+  <div class="panel" data-tag="01 — Imagen">
+    <input type="file" id="fileInput" accept="image/*">
+    <div class="hint">El tamaño final se calcula solo, al máximo que permitan el papel y la cantidad de hojas, sin deformar la imagen.</div>
+  </div>
+
+  <div class="panel" data-tag="02 — Papel">
+    <label>Tipo de hoja</label>
+    <select id="paperType">
+      <option value="carta">Carta (21.6 × 27.9 cm)</option>
+      <option value="oficio">Oficio (21.6 × 34 cm)</option>
+      <option value="legal">Legal / Legal US (21.6 × 35.6 cm)</option>
+      <option value="custom">Personalizado</option>
+    </select>
+    <div class="row" id="customPaperRow" style="display:none">
+      <div><label>Ancho (cm)</label><input type="number" id="paperW" value="21.6" step="0.1"></div>
+      <div><label>Alto (cm)</label><input type="number" id="paperH" value="27.9" step="0.1"></div>
+    </div>
+    <label>Orientación de la hoja</label>
+    <div class="toggle">
+      <button id="orientA" class="active">Auto</button>
+      <button id="orientV">Vertical</button>
+      <button id="orientH">Horizontal</button>
+    </div>
+  </div>
+
+  <div class="panel" data-tag="03 — División en hojas">
+    <div class="chiprow" id="presetChips">
+      <div class="chip" data-c="1" data-r="2">2 (1×2)</div>
+      <div class="chip" data-c="2" data-r="1">2 (2×1)</div>
+      <div class="chip active" data-c="2" data-r="2">4 (2×2)</div>
+      <div class="chip" data-c="2" data-r="3">6 (2×3)</div>
+      <div class="chip" data-c="3" data-r="3">9 (3×3)</div>
+    </div>
+    <div class="row">
+      <div><label>filas</label><input type="number" id="cols" value="2" min="1"></div>
+      <div><label>Columnas</label><input type="number" id="rows" value="2" min="1"></div>
+    </div>
+  </div>
+
+  <div class="panel" data-tag="04 — Márgenes">
+    <div class="row">
+      <div>
+        <label>Margen de impresora (cm)</label>
+        <input type="number" id="printerMargin" value="0.5" min="0" step="0.1">
+      </div>
+      <div>
+        <label>Traslape para pegar (cm)</label>
+        <input type="number" id="overlap" value="0" min="0" step="0.1">
+      </div>
+    </div>
+    <div class="hint">El margen de impresora es el borde en blanco que tu impresora no puede pintar. El traslape duplica una franja de imagen en los bordes internos para alinear mejor al pegar (no agranda el resultado final).</div>
+    <label>Calidad de salida</label>
+    <select id="quality">
+      <option value="100">Borrador (100 DPI)</option>
+      <option value="150" selected>Normal (150 DPI)</option>
+      <option value="300">Alta (300 DPI)</option>
+    </select>
+  </div>
+
+  <div class="panel" data-tag="Vista previa · tal cual sale en papel">
+    <canvas id="preview" width="800" height="600"></canvas>
+    <div class="dims" id="dimsOut"></div>
+    <div class="warn" id="warnBox"></div>
+  </div>
+
+  <button class="cta" id="generateBtn" disabled>Cargá una imagen primero</button>
+  <button class="cta secondary" id="printBtn" disabled>Imprimir</button>
+  <div class="status" id="statusLine"></div>
+</main>
+
+<script>
+const state = { img:null, imgW:0, imgH:0 };
+
+const $ = id => document.getElementById(id);
+const fileInput=$('fileInput');
+const paperType=$('paperType'), customPaperRow=$('customPaperRow'), paperWIn=$('paperW'), paperHIn=$('paperH');
+const orientA=$('orientA'), orientV=$('orientV'), orientH=$('orientH');
+const colsIn=$('cols'), rowsIn=$('rows'), presetChips=$('presetChips');
+const printerMargin=$('printerMargin'), overlapIn=$('overlap'), quality=$('quality');
+const canvas=$('preview'), ctx=canvas.getContext('2d');
+const dimsOut=$('dimsOut'), warnBox=$('warnBox'), generateBtn=$('generateBtn'), printBtn=$('printBtn'), statusLine=$('statusLine');
+const undoBtn=$('undoBtn'), redoBtn=$('redoBtn');
+
+let orientation='auto';
+const PAPERS = { carta:[21.6,27.9], oficio:[21.6,34], legal:[21.6,35.6] };
+
+// --- SISTEMA DE HISTORIAL (UNDO/REDO) ---
+const history = {
+  stack: [],
+  index: -1,
+  isPerformingUndoRedo: false
+};
+
+function getCurrentState() {
+  return {
+    paperType: paperType.value,
+    paperW: paperWIn.value,
+    paperH: paperHIn.value,
+    orientation: orientation,
+    cols: colsIn.value,
+    rows: rowsIn.value,
+    printerMargin: printerMargin.value,
+    overlap: overlapIn.value,
+    quality: quality.value
+  };
+}
+
+function saveState() {
+  if (history.isPerformingUndoRedo) return;
+  
+  const current = getCurrentState();
+  const lastState = history.stack[history.index];
+
+  // Evitar guardar duplicados seguidos
+  if (lastState && JSON.stringify(lastState) === JSON.stringify(current)) return;
+
+  // Si recortamos el historial escribiendo cambios tras deshacer
+  history.stack = history.stack.slice(0, history.index + 1);
+  history.stack.push(current);
+  history.index++;
+  
+  updateHistoryUI();
+}
+
+function applyState(s) {
+  history.isPerformingUndoRedo = true;
+
+  paperType.value = s.paperType;
+  customPaperRow.style.display = paperType.value === 'custom' ? 'flex' : 'none';
+  paperWIn.value = s.paperW;
+  paperHIn.value = s.paperH;
+
+  orientation = s.orientation;
+  [orientA, orientV, orientH].forEach(b => b.classList.remove('active'));
+  ({ auto: orientA, vertical: orientV, horizontal: orientH })[orientation].classList.add('active');
+
+  colsIn.value = s.cols;
+  rowsIn.value = s.rows;
+
+  // Actualizar chips según columnas/filas
+  presetChips.querySelectorAll('.chip').forEach(c => {
+    const isMatch = c.dataset.c === String(s.cols) && c.dataset.r === String(s.rows);
+    c.classList.toggle('active', isMatch);
+  });
+
+  printerMargin.value = s.printerMargin;
+  overlapIn.value = s.overlap;
+  quality.value = s.quality;
+
+  render();
+
+  history.isPerformingUndoRedo = false;
+  updateHistoryUI();
+}
+
+function undo() {
+  if (history.index > 0) {
+    history.index--;
+    applyState(history.stack[history.index]);
+  }
+}
+
+function redo() {
+  if (history.index < history.stack.length - 1) {
+    history.index++;
+    applyState(history.stack[history.index]);
+  }
+}
+
+function updateHistoryUI() {
+  undoBtn.disabled = history.index <= 0;
+  redoBtn.disabled = history.index >= history.stack.length - 1;
+}
+
+// Guardar el estado inicial
+saveState();
+
+// Eventos Undo / Redo
+undoBtn.addEventListener('click', undo);
+redoBtn.addEventListener('click', redo);
+
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
+    e.preventDefault(); undo();
+  } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+    e.preventDefault(); redo();
+  }
+});
+
+// --- EVENTOS CON REGISTRO DE HISTORIAL ---
+fileInput.addEventListener('change', e=>{
+  const file = e.target.files[0]; if(!file) return;
+  const img = new Image();
+  img.onload = ()=>{
+    state.img=img; state.imgW=img.naturalWidth; state.imgH=img.naturalHeight;
+    generateBtn.disabled=false; generateBtn.textContent='Generar PDF';
+    printBtn.disabled=false;
+    render();
+  };
+  img.src = URL.createObjectURL(file);
+});
+
+paperType.addEventListener('change', ()=>{
+  customPaperRow.style.display = paperType.value==='custom' ? 'flex' : 'none';
+  render();
+  saveState();
+});
+
+[paperWIn, paperHIn].forEach(el => {
+  el.addEventListener('input', render);
+  el.addEventListener('change', saveState);
+});
+
+function setOrientation(o){
+  orientation=o;
+  [orientA,orientV,orientH].forEach(b=>b.classList.remove('active'));
+  ({auto:orientA, vertical:orientV, horizontal:orientH})[o].classList.add('active');
+  render();
+  saveState();
+}
+orientA.addEventListener('click', ()=>setOrientation('auto'));
+orientV.addEventListener('click', ()=>setOrientation('vertical'));
+orientH.addEventListener('click', ()=>setOrientation('horizontal'));
+
+presetChips.querySelectorAll('.chip').forEach(chip=>{
+  chip.addEventListener('click', ()=>{
+    presetChips.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
+    chip.classList.add('active');
+    colsIn.value = chip.dataset.c; rowsIn.value = chip.dataset.r;
+    render();
+    saveState();
+  });
+});
+
+[colsIn, rowsIn, printerMargin, overlapIn, quality].forEach(el => {
+  el.addEventListener('input', () => {
+    if (el === colsIn || el === rowsIn) {
+      presetChips.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    }
+    render();
+  });
+  el.addEventListener('change', saveState);
+});
+
+function getPaperCmFor(orient){
+  let w,h;
+  if(paperType.value==='custom'){ w=parseFloat(paperWIn.value)||21.6; h=parseFloat(paperHIn.value)||27.9; }
+  else [w,h] = PAPERS[paperType.value];
+  if(orient==='horizontal') [w,h]=[h,w];
+  return {w,h};
+}
+
+function calcForOrientation(orient, cols, rows, overlap, margin, imgAspect){
+  const paper = getPaperCmFor(orient==='auto'?'vertical':orient);
+  const printableW = paper.w - 2*margin, printableH = paper.h - 2*margin;
+  const effW = printableW - (cols>1?overlap:0);
+  const effH = printableH - (rows>1?overlap:0);
+  if(effW<=0 || effH<=0) return null;
+  const availW = cols*effW, availH = rows*effH;
+  let Wf, Hf;
+  if(availW/availH > imgAspect){ Hf=availH; Wf=availH*imgAspect; }
+  else { Wf=availW; Hf=availW/imgAspect; }
+  return {paper,printableW,printableH,Wf,Hf,area:Wf*Hf};
+}
+
+function computeLayout(){
+  const cols = Math.max(1, parseInt(colsIn.value)||1), rows = Math.max(1, parseInt(rowsIn.value)||1);
+  const overlap = parseFloat(overlapIn.value)||0;
+  const margin = parseFloat(printerMargin.value)||0;
+  const imgAspect = state.img ? state.imgW/state.imgH : 4/3;
+
+  let result;
+  if(orientation==='auto'){
+    const v = calcForOrientation('vertical', cols, rows, overlap, margin, imgAspect);
+    const h = calcForOrientation('horizontal', cols, rows, overlap, margin, imgAspect);
+    if(!v && !h) result=null;
+    else if(!v) result=h;
+    else if(!h) result=v;
+    else result = h.area > v.area ? h : v;
+  } else {
+    result = calcForOrientation(orientation, cols, rows, overlap, margin, imgAspect);
+  }
+  if(!result) return null;
+
+  const {paper,printableW,printableH,Wf,Hf} = result;
+  const nomTileW = Wf/cols, nomTileH = Hf/rows;
+  const maxTileW = nomTileW + (cols>1?overlap:0), maxTileH = nomTileH + (rows>1?overlap:0);
+  return {Wf,Hf,cols,rows,overlap,margin,paper,printableW,printableH,nomTileW,nomTileH,maxTileW,maxTileH};
+}
+
+function render(){
+  const L = computeLayout();
+  if(!L){
+    warnBox.style.display='block';
+    warnBox.textContent = 'El traslape es demasiado grande para el papel/márgenes elegidos. Reducilo.';
+    dimsOut.innerHTML=''; generateBtn.disabled=true; printBtn.disabled=true;
+    return;
+  }
+  warnBox.style.display='none';
+  if(state.img){ generateBtn.disabled=false; generateBtn.textContent='Generar PDF'; printBtn.disabled=false; }
+
+  dimsOut.innerHTML = `
+    <div><span>Tamaño final armado</span>${L.Wf.toFixed(1)} × ${L.Hf.toFixed(1)} cm</div>
+    <div><span>Hojas</span>${L.cols*L.rows} (${L.cols} col × ${L.rows} fil)</div>
+    <div><span>Papel usado (orientación)</span>${L.paper.w.toFixed(1)} × ${L.paper.h.toFixed(1)} cm</div>
+    <div><span>Contenido por hoja (con traslape)</span>${L.maxTileW.toFixed(1)} × ${L.maxTileH.toFixed(1)} cm</div>
+  `;
+
+  const gapCm = Math.max(L.paper.w, L.paper.h) * 0.06;
+  const totalWunits = L.cols*L.paper.w + (L.cols-1)*gapCm;
+  const totalHunits = L.rows*L.paper.h + (L.rows-1)*gapCm;
+
+  const cw = canvas.clientWidth || 360;
+  canvas.width = cw*2;
+  canvas.height = (cw*2) * (totalHunits/totalWunits);
+  ctx.setTransform(2,0,0,2,0,0);
+  const W=canvas.width/2, H=canvas.height/2;
+  ctx.clearRect(0,0,W,H);
+  ctx.fillStyle='#0B1929'; ctx.fillRect(0,0,W,H);
+
+  const scale = W/totalWunits;
+  const pxPerCmSrcX = state.img ? state.imgW/L.Wf : 0;
+  const pxPerCmSrcY = state.img ? state.imgH/L.Hf : 0;
+
+  for(let r=0;r<L.rows;r++){
+    for(let c=0;c<L.cols;c++){
+      const pageX = c*(L.paper.w+gapCm)*scale;
+      const pageY = r*(L.paper.h+gapCm)*scale;
+      const pageWpx = L.paper.w*scale, pageHpx = L.paper.h*scale;
+
+      ctx.fillStyle='#FFFFFF'; ctx.fillRect(pageX,pageY,pageWpx,pageHpx);
+      ctx.strokeStyle='#4FD1E8'; ctx.lineWidth=1; ctx.strokeRect(pageX,pageY,pageWpx,pageHpx);
+
+      const marginPx = L.margin*scale;
+      const printableWpx = pageWpx - 2*marginPx, printableHpx = pageHpx - 2*marginPx;
+      ctx.strokeStyle='#B9C6CF'; ctx.setLineDash([3,3]); ctx.lineWidth=0.6;
+      ctx.strokeRect(pageX+marginPx, pageY+marginPx, printableWpx, printableHpx);
+      ctx.setLineDash([]);
+
+      if(state.img){
+        const extraRight = c < L.cols-1 ? L.overlap : 0;
+        const extraBottom = r < L.rows-1 ? L.overlap : 0;
+        const tileWcm = L.nomTileW+extraRight, tileHcm = L.nomTileH+extraBottom;
+        const srcX = Math.round(c*L.nomTileW*pxPerCmSrcX);
+        const srcY = Math.round(r*L.nomTileH*pxPerCmSrcY);
+        const srcW = Math.min(state.imgW-srcX, Math.round(tileWcm*pxPerCmSrcX));
+        const srcH = Math.min(state.imgH-srcY, Math.round(tileHcm*pxPerCmSrcY));
+        const tileWpx = tileWcm*scale, tileHpx = tileHcm*scale;
+        const drawX = pageX+marginPx+(printableWpx-tileWpx)/2;
+        const drawY = pageY+marginPx+(printableHpx-tileHpx)/2;
+        ctx.drawImage(state.img, srcX,srcY,srcW,srcH, drawX,drawY,tileWpx,tileHpx);
+
+        ctx.strokeStyle='#F2A65A'; ctx.setLineDash([4,3]); ctx.lineWidth=1;
+        const nomWpx = L.nomTileW*scale, nomHpx = L.nomTileH*scale;
+        if(extraRight>0){ ctx.beginPath(); ctx.moveTo(drawX+nomWpx,drawY); ctx.lineTo(drawX+nomWpx,drawY+tileHpx); ctx.stroke(); }
+        if(extraBottom>0){ ctx.beginPath(); ctx.moveTo(drawX,drawY+nomHpx); ctx.lineTo(drawX+tileWpx,drawY+nomHpx); ctx.stroke(); }
+        ctx.setLineDash([]);
+      }
+    }
+  }
+}
+
+async function buildPages(L, dpi, statusPrefix){
+  const pxPerCmOut = dpi/2.54;
+  const pxPerCmSrcX = state.imgW / L.Wf, pxPerCmSrcY = state.imgH / L.Hf;
+  const pageWpx = Math.round(L.paper.w * pxPerCmOut);
+  const pageHpx = Math.round(L.paper.h * pxPerCmOut);
+  const total = L.cols*L.rows;
+  const pages = [];
+  let pageNum=0;
+
+  for(let r=0; r<L.rows; r++){
+    for(let c=0; c<L.cols; c++){
+      pageNum++;
+      statusLine.textContent = `${statusPrefix} hoja ${pageNum} de ${total}…`;
+      const extraRight = c < L.cols-1 ? L.overlap : 0;
+      const extraBottom = r < L.rows-1 ? L.overlap : 0;
+      const tileWcm = L.nomTileW + extraRight, tileHcm = L.nomTileH + extraBottom;
+
+      const srcX = Math.round(c*L.nomTileW*pxPerCmSrcX);
+      const srcY = Math.round(r*L.nomTileH*pxPerCmSrcY);
+      const srcW = Math.min(state.imgW-srcX, Math.round(tileWcm*pxPerCmSrcX));
+      const srcH = Math.min(state.imgH-srcY, Math.round(tileHcm*pxPerCmSrcY));
+
+      const pc = document.createElement('canvas');
+      pc.width = pageWpx; pc.height = pageHpx;
+      const pctx = pc.getContext('2d');
+      pctx.fillStyle='#FFFFFF'; pctx.fillRect(0,0,pageWpx,pageHpx);
+
+      const tileWpx = Math.round(tileWcm*pxPerCmOut), tileHpx = Math.round(tileHcm*pxPerCmOut);
+      const drawX = Math.round((pageWpx - tileWpx)/2), drawY = Math.round((pageHpx - tileHpx)/2);
+      pctx.drawImage(state.img, srcX, srcY, srcW, srcH, drawX, drawY, tileWpx, tileHpx);
+
+      pctx.strokeStyle='#F2A65A'; pctx.setLineDash([pxPerCmOut*0.3, pxPerCmOut*0.2]); pctx.lineWidth=Math.max(1,dpi/150);
+      const nomWpx = Math.round(L.nomTileW*pxPerCmOut), nomHpx = Math.round(L.nomTileH*pxPerCmOut);
+      if(extraRight>0){ pctx.beginPath(); pctx.moveTo(drawX+nomWpx, drawY); pctx.lineTo(drawX+nomWpx, drawY+tileHpx); pctx.stroke(); }
+      if(extraBottom>0){ pctx.beginPath(); pctx.moveTo(drawX, drawY+nomHpx); pctx.lineTo(drawX+tileWpx, drawY+nomHpx); pctx.stroke(); }
+      pctx.setLineDash([]);
+
+      pctx.strokeStyle='#4FD1E8'; pctx.lineWidth=Math.max(1,dpi/150);
+      const ch=Math.round(pxPerCmOut*0.4);
+      [[drawX,drawY],[drawX+tileWpx,drawY],[drawX,drawY+tileHpx],[drawX+tileWpx,drawY+tileHpx]].forEach(([x,y])=>{
+        pctx.beginPath(); pctx.moveTo(x-ch,y); pctx.lineTo(x+ch,y); pctx.moveTo(x,y-ch); pctx.lineTo(x,y+ch); pctx.stroke();
+      });
+
+      pages.push(pc.toDataURL('image/jpeg', 0.93));
+      await new Promise(res=>setTimeout(res,0));
+    }
+  }
+  return pages;
+}
+
+generateBtn.addEventListener('click', async ()=>{
+  const L = computeLayout();
+  if(!state.img || !L) return;
+  generateBtn.disabled=true; generateBtn.textContent='Generando…';
+  const dpi = parseInt(quality.value);
+  const pages = await buildPages(L, dpi, 'Generando');
+
+  const { jsPDF } = window.jspdf;
+  let pdf = null;
+  pages.forEach((dataUrl,i)=>{
+    if(!pdf) pdf = new jsPDF({ unit:'cm', format:[L.paper.w, L.paper.h] });
+    else pdf.addPage([L.paper.w, L.paper.h]);
+    pdf.addImage(dataUrl, 'JPEG', 0, 0, L.paper.w, L.paper.h);
+  });
+  pdf.save('plano-de-corte.pdf');
+
+  statusLine.textContent = `Listo — ${pages.length} hojas exportadas.`;
+  generateBtn.disabled=false; generateBtn.textContent='Generar PDF';
+});
+
+printBtn.addEventListener('click', async ()=>{
+  const L = computeLayout();
+  if(!state.img || !L) return;
+  printBtn.disabled=true; printBtn.textContent='Preparando…';
+  const dpi = parseInt(quality.value);
+  const pages = await buildPages(L, dpi, 'Preparando');
+
+  const w = window.open('', '_blank');
+  const imgsHtml = pages.map(src => `<img src="${src}">`).join('');
+  w.document.write(`
+    <!DOCTYPE html><html><head><title>Imprimir</title>
+    <style>
+      @page{ size:${L.paper.w}cm ${L.paper.h}cm; margin:0; }
+      html,body{ margin:0; padding:0; }
+      img{ width:${L.paper.w}cm; height:${L.paper.h}cm; display:block; page-break-after:always; }
+      img:last-child{ page-break-after:auto; }
+    </style></head>
+    <body>${imgsHtml}</body></html>
+  `);
+  w.document.close();
+  w.onload = () => { w.focus(); w.print(); };
+
+  statusLine.textContent = `Listo — enviado a impresión (${pages.length} hojas).`;
+  printBtn.disabled=false; printBtn.textContent='Imprimir';
+});
+
+render();
+</script>
+</body>
+</html>
