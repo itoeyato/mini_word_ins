@@ -2139,6 +2139,35 @@
       <!-- FIX 1: "Solo frente" -> "Todas" -->
       <div class="toggle"><button id="printDuplexOff" class="active">Todas</button><button id="printDuplexOdd">Frente (impares)</button><button id="printDuplexEven">Reverso (pares)</button></div>
       <div class="hint" style="margin:8px 0;padding:8px;border-radius:6px;line-height:1.4">Tamaño físico: para que las medidas en cm sean exactas, en el diálogo de impresión selecciona <b>Tamaño real / 100%</b> y desactiva «Ajustar a página». La impresora puede tener márgenes no imprimibles.</div>
+      <details id="pcDetails" style="margin:8px 0">
+        <summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text)">Compensación de impresora</summary>
+        <div class="adjust-box">
+          <div class="toggle"><button id="pcOn">Activada</button><button id="pcOff">Desactivada</button></div>
+          <div class="ps-info" id="pcInfo"></div>
+          <div class="row">
+            <div><label>Desplazamiento X (mm)</label><input type="text" inputmode="decimal" id="pcOx" /></div>
+            <div><label>Desplazamiento Y (mm)</label><input type="text" inputmode="decimal" id="pcOy" /></div>
+          </div>
+          <div class="row">
+            <div><label>Escala X (%)</label><input type="text" inputmode="decimal" id="pcSx" /></div>
+            <div><label>Escala Y (%)</label><input type="text" inputmode="decimal" id="pcSy" /></div>
+          </div>
+          <div class="ps-hint">Valores = lo que hace tu impresora (negativo = corre el dibujo hacia arriba/izquierda). El editor dibuja al revés para cancelarlo.</div>
+          <button class="btn full" id="pcTestBtn">1) Imprimir hoja de prueba</button>
+          <div class="ps-hint">Mide con regla, desde el borde de la hoja hasta el centro de la línea del marco (cm):</div>
+          <div class="row">
+            <div><label>Arriba</label><input type="text" inputmode="decimal" id="pcMT" /></div>
+            <div><label>Abajo</label><input type="text" inputmode="decimal" id="pcMB" /></div>
+          </div>
+          <div class="row">
+            <div><label>Izquierda</label><input type="text" inputmode="decimal" id="pcML" /></div>
+            <div><label>Derecha</label><input type="text" inputmode="decimal" id="pcMR" /></div>
+          </div>
+          <button class="btn full" id="pcCalcBtn">2) Calcular compensación</button>
+          <button class="btn full" id="pcResetBtn">Restaurar valores de fábrica</button>
+          <div class="ps-hint">Se guarda por tamaño de hoja. Tras calcular, vuelve a imprimir la hoja de prueba: los 4 márgenes deben salir de 1 cm. La zona que la impresora no imprime (~0.3–0.4 cm del borde) no se puede compensar.</div>
+        </div>
+      </details>
       <label>Vista previa</label>
       <div class="print-preview" id="printPreview"></div>
       <button class="cta full" id="doPrintBtn" style="margin-top: 12px;">Imprimir ahora</button>
@@ -5488,7 +5517,7 @@ ctx.restore();
   }
   function openPrintModal() {
     $('printFrom').max = state.pages.length; $('printTo').max = state.pages.length;
-    $('printFrom').value = 1; $('printTo').value = state.pages.length;
+    $('printFrom').value = 1; $('printTo').value = state.pages.length; pcRefresh();
     setPrintScope('all'); setPrintDuplex('off');
     const m = $('printModal'); m.classList.add('show'); setTimeout(() => m.classList.add('visible'), 10);
   }
@@ -5496,6 +5525,154 @@ ctx.restore();
     const m = $('printModal'); m.classList.remove('visible');
     setTimeout(() => m.classList.remove('show'), 250);
   }
+
+  /* ====== COMPENSACIÓN DE IMPRESORA (Mopria) ======
+     Modelo: posición impresa (cm desde la esquina de la hoja real) = o + s · posición dibujada.
+     Para que lo impreso caiga donde el editor dice, se dibuja en d = (e − o) / s.
+     Valores por defecto sacados de tus pruebas (marco a 0.5 cm: izq 0.45, der 0.95, arr 0.4, abajo 0.9).
+     La zona no imprimible de la impresora NO se puede compensar por software. */
+  const PC_KEY = 'printCalib_v1', PC_SAFE = 0.2;
+  const PC_DEFAULTS = {
+    '21.2x27.6': { on: true, sx: 1, sy: 1, ox: -0.05, oy: -0.10 },  // "carta" del editor
+    '21.6x27.9': { on: true, sx: 1, sy: 1, ox: -0.05, oy: -0.10 }   // PDF tamaño carta
+  };
+  let pcStore = {};
+  try { pcStore = JSON.parse(localStorage.getItem(PC_KEY)) || {}; } catch (_) { pcStore = {}; }
+  const pcKey = (w, h) => w.toFixed(1) + 'x' + h.toFixed(1);
+  function pcGet(w, h) {
+    const k = pcKey(w, h), c = pcStore[k] || PC_DEFAULTS[k];
+    return c ? { k, on: !!c.on, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { k, on: false, sx: 1, sy: 1, ox: 0, oy: 0 };
+  }
+  function pcPersist() { try { localStorage.setItem(PC_KEY, JSON.stringify(pcStore)); } catch (_) {} }
+  function pcSave(k, c) { pcStore[k] = { on: !!c.on, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy }; pcPersist(); }
+  const pcActive = (c) => c.on && (c.sx !== 1 || c.sy !== 1 || c.ox !== 0 || c.oy !== 0);
+  function pcSheet(w, h, isEditor) {
+    if (isEditor) {
+      const sh = state.paperType === 'carta' ? [21.59, 27.94] : state.paperType === 'legal' ? [21.59, 35.56] : null;
+      if (sh) return state.orientation === 'horizontal' ? [sh[1], sh[0]] : sh;
+    }
+    return [w, h];
+  }
+  // Caja imprimible: nunca más grande que la hoja real menos una reserva (evita hojas en blanco).
+  const pcBox = (w, h, sheet) => ({ w: Math.min(w, sheet[0] - PC_SAFE), h: Math.min(h, sheet[1] - PC_SAFE) });
+  function pcTransform(src, c, wCm, hCm, box) {
+    const pX = src.width / wCm, pY = src.height / hCm;
+    const out = document.createElement('canvas');
+    out.width = Math.round(box.w * pX); out.height = Math.round(box.h * pY);
+    const g = out.getContext('2d');
+    g.fillStyle = '#ffffff'; g.fillRect(0, 0, out.width, out.height);
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(src, (-c.ox / c.sx) * pX, (-c.oy / c.sy) * pY, src.width / c.sx, src.height / c.sy);
+    return out;
+  }
+  function pcSizeRule(p) {
+    if (state.paperType === 'carta') return state.orientation === 'horizontal' ? 'letter landscape' : 'letter';
+    if (state.paperType === 'legal') return state.orientation === 'horizontal' ? 'legal landscape' : 'legal';
+    return `${(p.w / 2.54).toFixed(4)}in ${(p.h / 2.54).toFixed(4)}in`;
+  }
+  function pcRefresh() {
+    const p = getPaperCm(), c = pcGet(p.w, p.h), s = pcSheet(p.w, p.h, true);
+    const known = !!(pcStore[c.k] || PC_DEFAULTS[c.k]);
+    $('pcInfo').textContent = `Hoja del editor ${p.w}×${p.h} cm · hoja real ${s[0]}×${s[1]} cm` + (known ? '' : ' · sin calibrar');
+    $('pcInfo').classList.toggle('warn', !known);
+    $('pcOn').classList.toggle('active', c.on); $('pcOff').classList.toggle('active', !c.on);
+    $('pcOx').value = (c.ox * 10).toFixed(2); $('pcOy').value = (c.oy * 10).toFixed(2);
+    $('pcSx').value = (c.sx * 100).toFixed(2); $('pcSy').value = (c.sy * 100).toFixed(2);
+  }
+  const pcNum = (id) => { const v = parseFloat(String($(id).value).replace(',', '.')); return isFinite(v) ? v : null; };
+  function pcReadFields() {
+    const p = getPaperCm(), c = pcGet(p.w, p.h);
+    const ox = pcNum('pcOx'), oy = pcNum('pcOy'), sx = pcNum('pcSx'), sy = pcNum('pcSy');
+    if (ox !== null) c.ox = ox / 10; if (oy !== null) c.oy = oy / 10;
+    if (sx !== null) c.sx = Math.min(1.1, Math.max(0.9, sx / 100)); if (sy !== null) c.sy = Math.min(1.1, Math.max(0.9, sy / 100));
+    pcSave(c.k, c); pcRefresh();
+  }
+  function pcSetOn(on) {
+    const p = getPaperCm(), c = pcGet(p.w, p.h); c.on = on; pcSave(c.k, c); pcRefresh();
+  }
+  async function pcRunPrint(cvs, box, sizeRule) {
+    const printArea = $('printArea'), oldHTML = printArea.innerHTML;
+    const oldPW = printArea.style.getPropertyValue('--pw'), oldPH = printArea.style.getPropertyValue('--ph');
+    let styleTag = document.getElementById('dynamicPageSize');
+    if (!styleTag) { styleTag = document.createElement('style'); styleTag.id = 'dynamicPageSize'; document.head.appendChild(styleTag); }
+    const oldRule = styleTag.textContent;
+    styleTag.textContent = `@media print { @page { size: ${sizeRule}; margin: 0; } }`;
+    printArea.innerHTML = '';
+    printArea.style.setProperty('--pw', `${(box.w / 2.54 * 72).toFixed(4)}pt`);
+    printArea.style.setProperty('--ph', `${(box.h / 2.54 * 72).toFixed(4)}pt`);
+    cvs.forEach((cv, i) => {
+      const d = document.createElement('div'); d.className = 'print-page';
+      const im = document.createElement('img'); im.alt = `Prueba ${i + 1}`; im.src = cv.toDataURL('image/png');
+      d.appendChild(im); printArea.appendChild(d);
+    });
+    await Promise.all(Array.from(printArea.querySelectorAll('img')).map(im => im.decode ? im.decode().catch(() => {}) : Promise.resolve()));
+    let restored = false;
+    const restore = () => {
+      if (restored) return; restored = true;
+      printArea.innerHTML = oldHTML;
+      if (oldPW) printArea.style.setProperty('--pw', oldPW); else printArea.style.removeProperty('--pw');
+      if (oldPH) printArea.style.setProperty('--ph', oldPH); else printArea.style.removeProperty('--ph');
+      styleTag.textContent = oldRule;
+      window.removeEventListener('afterprint', restore);
+    };
+    window.addEventListener('afterprint', restore);
+    window.print();
+    setTimeout(restore, 60000);
+  }
+  async function pcTestPrint() {
+    sfx.click();
+    const p = getPaperCm(), c = pcGet(p.w, p.h), act = pcActive(c), sheet = pcSheet(p.w, p.h, true);
+    const M = 1, k = 300 / 2.54;
+    const cv = document.createElement('canvas'); cv.width = Math.round(p.w * k); cv.height = Math.round(p.h * k);
+    const g = cv.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    g.strokeStyle = '#000'; g.lineWidth = 0.04 * k;
+    g.strokeRect(M * k, M * k, (p.w - 2 * M) * k, (p.h - 2 * M) * k);
+    const cx = p.w / 2, cy = p.h / 2;
+    g.lineWidth = 0.03 * k; g.beginPath();
+    g.moveTo((cx - 5) * k, cy * k); g.lineTo((cx + 5) * k, cy * k);
+    for (let i = 0; i <= 10; i++) { const x = (cx - 5 + i) * k; g.moveTo(x, (cy - 0.25) * k); g.lineTo(x, (cy + 0.25) * k); }
+    g.stroke();
+    g.fillStyle = '#000'; g.textAlign = 'center'; g.font = `${0.42 * k}px sans-serif`;
+    g.fillText('Hoja de prueba · marco a 1 cm del borde · regla de 10 cm', cx * k, (cy - 0.7) * k);
+    g.fillText('Mide arriba / abajo / izquierda / derecha desde el borde de la hoja', cx * k, (cy + 1.2) * k);
+    const box = act ? pcBox(p.w, p.h, sheet) : { w: p.w, h: p.h };
+    const out = act ? pcTransform(cv, c, p.w, p.h, box) : cv;
+    pcStore.__last = { w: p.w, h: p.h, sheetW: sheet[0], sheetH: sheet[1], M, k: c.k, c0: act ? { sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { sx: 1, sy: 1, ox: 0, oy: 0 } };
+    pcPersist();
+    showToast('Imprime al 100 % y luego mide los 4 márgenes', 'info', 2500);
+    await pcRunPrint([out], box, pcSizeRule(p));
+  }
+  function pcCompute() {
+    sfx.click();
+    const L = pcStore.__last;
+    if (!L) { showToast('Primero imprime la hoja de prueba', 'error'); return; }
+    const PT = pcNum('pcMT'), PB = pcNum('pcMB'), PL = pcNum('pcML'), PR = pcNum('pcMR');
+    if ([PT, PB, PL, PR].some(v => v === null || v < 0 || v > 5)) { showToast('Escribe los 4 márgenes medidos (cm)', 'error'); return; }
+    const c0 = L.c0;
+    const dl = (L.M - c0.ox) / c0.sx, dr = (L.w - L.M - c0.ox) / c0.sx;
+    const dt = (L.M - c0.oy) / c0.sy, db = (L.h - L.M - c0.oy) / c0.sy;
+    const sx = ((L.sheetW - PR) - PL) / (dr - dl), ox = PL - sx * dl;
+    const sy = ((L.sheetH - PB) - PT) / (db - dt), oy = PT - sy * dt;
+    if (!(sx > 0.9 && sx < 1.1 && sy > 0.9 && sy < 1.1)) { showToast('Medidas raras: revisa que midas desde el borde de la hoja', 'error', 2500); return; }
+    const cur = pcGet(L.w, L.h);
+    pcSave(L.k, { on: true, sx, sy, ox, oy });
+    pcRefresh();
+    showToast('Compensación calculada y activada', 'info', 2000);
+  }
+  function pcInit() {
+    $('pcOn').addEventListener('click', () => pcSetOn(true));
+    $('pcOff').addEventListener('click', () => pcSetOn(false));
+    ['pcOx', 'pcOy', 'pcSx', 'pcSy'].forEach(id => $(id).addEventListener('change', pcReadFields));
+    $('pcTestBtn').addEventListener('click', pcTestPrint);
+    $('pcCalcBtn').addEventListener('click', pcCompute);
+    $('pcResetBtn').addEventListener('click', () => {
+      const p = getPaperCm(), k = pcKey(p.w, p.h); delete pcStore[k]; pcPersist(); pcRefresh();
+      showToast('Valores restaurados', 'info');
+    });
+  }
+  pcInit();
+
   async function performPrint() {
     sfx.click();
     const pages = getPrintPages();
@@ -5503,6 +5680,8 @@ ctx.restore();
     showLoading('Preparando impresión...');
     try {
       const paper = getPaperCm();
+      const pcC = pcGet(paper.w, paper.h), pcOn = pcActive(pcC);
+      const pcBx = pcOn ? pcBox(paper.w, paper.h, pcSheet(paper.w, paper.h, true)) : { w: paper.w, h: paper.h };
       const printArea = $('printArea'); printArea.innerHTML = '';
       printArea.style.removeProperty('--pw'); printArea.style.removeProperty('--ph');
       let styleTag = document.getElementById('dynamicPageSize');
@@ -5513,8 +5692,8 @@ ctx.restore();
       // imprimible y Chrome/Mopria inserten una hoja en blanco entre páginas.
       const inchW = (paper.w / 2.54).toFixed(4), inchH = (paper.h / 2.54).toFixed(4);
       // Usa el tamaño físico exacto en puntos; el diálogo de impresión debe estar al 100%.
-      printArea.style.setProperty('--pw', `${(paper.w / 2.54 * 72).toFixed(4)}pt`);
-      printArea.style.setProperty('--ph', `${(paper.h / 2.54 * 72).toFixed(4)}pt`);
+      printArea.style.setProperty('--pw', `${(pcBx.w / 2.54 * 72).toFixed(4)}pt`);
+      printArea.style.setProperty('--ph', `${(pcBx.h / 2.54 * 72).toFixed(4)}pt`);
       let sizeRule;
       if (state.paperType === 'carta' && state.orientation === 'vertical') sizeRule = 'letter';
       else if (state.paperType === 'carta' && state.orientation === 'horizontal') sizeRule = 'letter landscape';
@@ -5523,7 +5702,8 @@ ctx.restore();
       else sizeRule = `${inchW}in ${inchH}in`;
       styleTag.textContent = `@media print { @page { size: ${sizeRule}; margin: 0; } }`;
       for (const idx of pages) {
-        const canvas = await renderPageToCanvas(idx, 300, null, null);
+        let canvas = await renderPageToCanvas(idx, 300, null, null);
+        if (pcOn) canvas = pcTransform(canvas, pcC, paper.w, paper.h, pcBx);
         const dataUrl = canvas.toDataURL('image/png');
         const pageDiv = document.createElement('div'); pageDiv.className = 'print-page';
         const img = document.createElement('img'); img.src = dataUrl;
@@ -6870,6 +7050,13 @@ ctx.restore();
       // La caja de cada página conserva las dimensiones físicas del PDF.
       printArea.style.setProperty('--pw', `${ptW}pt`);
       printArea.style.setProperty('--ph', `${vp1.height.toFixed(4)}pt`);
+      const pcWc = vp1.width / 72 * 2.54, pcHc = vp1.height / 72 * 2.54;
+      const pcC = pcGet(pcWc, pcHc), pcOn = pcActive(pcC);
+      const pcBx = pcOn ? pcBox(pcWc, pcHc, [pcWc, pcHc]) : null;
+      if (pcBx) {
+        printArea.style.setProperty('--pw', `${(pcBx.w / 2.54 * 72).toFixed(4)}pt`);
+        printArea.style.setProperty('--ph', `${(pcBx.h / 2.54 * 72).toFixed(4)}pt`);
+      }
       for (const pNum of pages) {
         const page = await pdf.getPage(pNum);
         const vp = page.getViewport({ scale: 2.5 });
@@ -6877,7 +7064,7 @@ ctx.restore();
         canvas.width = vp.width; canvas.height = vp.height;
         const ctx = canvas.getContext('2d');
         await page.render({ canvasContext: ctx, viewport: vp }).promise;
-        const dataUrl = canvas.toDataURL('image/png');
+        const dataUrl = (pcOn ? pcTransform(canvas, pcC, pcWc, pcHc, pcBx) : canvas).toDataURL('image/png');
         const pageDiv = document.createElement('div'); pageDiv.className = 'print-page';
         const img = document.createElement('img'); img.src = dataUrl;
         pageDiv.appendChild(img); printArea.appendChild(pageDiv);
@@ -9695,12 +9882,18 @@ document.addEventListener('pointerdown', (e) => {
       printArea.innerHTML = '';
       printArea.style.setProperty('--pw', `${(p.w / 2.54 * 72).toFixed(4)}pt`);
       printArea.style.setProperty('--ph', `${(p.h / 2.54 * 72).toFixed(4)}pt`);
+      const pcC = pcGet(p.w, p.h), pcOn = pcActive(pcC);
+      const pcBx = pcOn ? pcBox(p.w, p.h, pcSheet(p.w, p.h, true)) : null;
+      if (pcBx) {
+        printArea.style.setProperty('--pw', `${(pcBx.w / 2.54 * 72).toFixed(4)}pt`);
+        printArea.style.setProperty('--ph', `${(pcBx.h / 2.54 * 72).toFixed(4)}pt`);
+      }
       // Imprime desde el área de impresión del documento actual: no abre otra pestaña.
       for (let i = 0; i < tiles.length; i++) {
         const t = tiles[i]; $('loading-label').textContent = `Preparando impresión: hoja ${i + 1} de ${tiles.length}…`; await psTick();
         const cv = psRenderTile(t.r, t.c, PS.dpi, i + 1, tiles.length);
         const pageDiv = document.createElement('div'); pageDiv.className = 'print-page';
-        const img = document.createElement('img'); img.alt = `Hoja ${i + 1}`; img.src = cv.toDataURL('image/png');
+        const img = document.createElement('img'); img.alt = `Hoja ${i + 1}`; img.src = (pcOn ? pcTransform(cv, pcC, p.w, p.h, pcBx) : cv).toDataURL('image/png');
         pageDiv.appendChild(img); printArea.appendChild(pageDiv);
         cv.width = 1; cv.height = 1;
       }
