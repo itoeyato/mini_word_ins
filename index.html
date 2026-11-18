@@ -1346,6 +1346,16 @@
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
 <link rel="apple-touch-icon" href="./icon-192.png">
+
+<style id="pwa-safe-area-notch">
+  /* Respeta las zonas seguras del dispositivo en modo fullscreen/PWA.
+     El viewport-fit=cover ya está declarado en el meta viewport. */
+  body > header {
+    padding-top: env(safe-area-inset-top, 0px) !important;
+    padding-left: max(6px, env(safe-area-inset-left, 0px)) !important;
+    padding-right: max(6px, env(safe-area-inset-right, 0px)) !important;
+  }
+</style>
 </head>
 
 <body class="theme-sunset">
