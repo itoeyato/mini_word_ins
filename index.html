@@ -2143,6 +2143,14 @@
         <summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text)">Compensación de impresora</summary>
         <div class="adjust-box">
           <div class="toggle"><button id="pcOn">Activada</button><button id="pcOff">Desactivada</button></div>
+          <label>Preset de compensación</label>
+          <select id="pcSel"></select>
+          <label>Nombre del preset</label>
+          <input type="text" id="pcName" />
+          <div class="row" style="margin-top:6px">
+            <button class="btn" id="pcNewBtn">+ Nuevo preset</button>
+            <button class="btn" id="pcDelBtn">Eliminar preset</button>
+          </div>
           <div class="ps-info" id="pcInfo"></div>
           <div class="row">
             <div><label>Desplazamiento X (mm)</label><input type="text" inputmode="decimal" id="pcOx" /></div>
@@ -2164,8 +2172,7 @@
             <div><label>Derecha</label><input type="text" inputmode="decimal" id="pcMR" /></div>
           </div>
           <button class="btn full" id="pcCalcBtn">2) Calcular compensación</button>
-          <button class="btn full" id="pcResetBtn">Restaurar valores de fábrica</button>
-          <div class="ps-hint">Se guarda por tamaño de hoja. Tras calcular, vuelve a imprimir la hoja de prueba: los 4 márgenes deben salir de 1 cm. La zona que la impresora no imprime (~0.3–0.4 cm del borde) no se puede compensar.</div>
+          <div class="ps-hint">Cada preset guarda su propia compensación. En «Automático» se usa el preset calibrado para el tamaño de hoja actual (carta, oficio…). Tras calcular, vuelve a imprimir la hoja de prueba: los 4 márgenes deben salir de 1 cm. La zona que la impresora no imprime (~0.3–0.4 cm del borde) no se puede compensar.</div>
         </div>
       </details>
       <label>Vista previa</label>
@@ -5526,25 +5533,51 @@ ctx.restore();
     setTimeout(() => m.classList.remove('show'), 250);
   }
 
-  /* ====== COMPENSACIÓN DE IMPRESORA (Mopria) ======
+  /* ====== COMPENSACIÓN DE IMPRESORA (Mopria) con PRESETS ======
      Modelo: posición impresa (cm desde la esquina de la hoja real) = o + s · posición dibujada.
      Para que lo impreso caiga donde el editor dice, se dibuja en d = (e − o) / s.
-     Valores por defecto sacados de tus pruebas (marco a 0.5 cm: izq 0.45, der 0.95, arr 0.4, abajo 0.9).
+     Cada preset = {nombre, tamaño de hoja con el que se calibró, ox, oy (cm), sx, sy}.
+     «Automático» usa el preset cuyo tamaño coincide con la hoja actual.
      La zona no imprimible de la impresora NO se puede compensar por software. */
-  const PC_KEY = 'printCalib_v1', PC_SAFE = 0.2;
-  const PC_DEFAULTS = {
-    '21.2x27.6': { on: true, sx: 1, sy: 1, ox: -0.05, oy: -0.10 },  // "carta" del editor
-    '21.6x27.9': { on: true, sx: 1, sy: 1, ox: -0.05, oy: -0.10 }   // PDF tamaño carta
-  };
-  let pcStore = {};
-  try { pcStore = JSON.parse(localStorage.getItem(PC_KEY)) || {}; } catch (_) { pcStore = {}; }
+  const PC_KEY = 'printCalib_v2', PC_KEY_OLD = 'printCalib_v1', PC_SAFE = 0.2;
   const pcKey = (w, h) => w.toFixed(1) + 'x' + h.toFixed(1);
-  function pcGet(w, h) {
-    const k = pcKey(w, h), c = pcStore[k] || PC_DEFAULTS[k];
-    return c ? { k, on: !!c.on, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { k, on: false, sx: 1, sy: 1, ox: 0, oy: 0 };
+  const pcKeyLabel = (k) => k.replace('x', '×');
+  const pcId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  function pcLoad() {
+    let st = null;
+    try { st = JSON.parse(localStorage.getItem(PC_KEY)); } catch (_) { st = null; }
+    if (!st || !Array.isArray(st.presets)) {
+      st = { v: 2, enabled: true, active: 'auto', presets: [], last: null };
+      let old = {};
+      try { old = JSON.parse(localStorage.getItem(PC_KEY_OLD)) || {}; } catch (_) { old = {}; }
+      if (old.__last) st.last = old.__last;
+      Object.keys(old).forEach(k => {
+        const c = old[k];
+        if (k === '__last' || !c || typeof c.sx !== 'number') return;
+        st.presets.push({ id: pcId(), name: k === '21.3x27.6' ? 'Carta 21.3×27.6 (Mopria)' : 'Hoja ' + pcKeyLabel(k), key: k, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy });
+      });
+    }
+    if (!st.presets.length) st.presets.push({ id: pcId(), name: 'Carta 21.3×27.6 (Mopria)', key: '21.3x27.6', sx: 0.987, sy: 0.985, ox: -0.05, oy: 0.02 });
+    if (st.active !== 'auto' && !st.presets.some(x => x.id === st.active)) st.active = 'auto';
+    if (typeof st.enabled !== 'boolean') st.enabled = true;
+    return st;
   }
-  function pcPersist() { try { localStorage.setItem(PC_KEY, JSON.stringify(pcStore)); } catch (_) {} }
-  function pcSave(k, c) { pcStore[k] = { on: !!c.on, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy }; pcPersist(); }
+  let pcSt = pcLoad();
+  function pcPersist() { try { localStorage.setItem(PC_KEY, JSON.stringify(pcSt)); } catch (_) {} }
+  // Preset que corresponde a una hoja. strict = solo si su tamaño coincide (PDF).
+  function pcCur(w, h, strict) {
+    const k = pcKey(w, h);
+    if (pcSt.active !== 'auto') {
+      const x = pcSt.presets.find(q => q.id === pcSt.active);
+      if (x && (!strict || x.key === k)) return x;
+      if (!strict) return null;
+    }
+    return pcSt.presets.find(q => q.key === k) || null;
+  }
+  function pcGet(w, h, strict) {
+    const x = pcCur(w, h, strict), k = pcKey(w, h);
+    return (x && pcSt.enabled) ? { k, on: true, sx: x.sx, sy: x.sy, ox: x.ox, oy: x.oy } : { k, on: false, sx: 1, sy: 1, ox: 0, oy: 0 };
+  }
   const pcActive = (c) => c.on && (c.sx !== 1 || c.sy !== 1 || c.ox !== 0 || c.oy !== 0);
   function pcSheet(w, h, isEditor) {
     if (isEditor) {
@@ -5570,25 +5603,54 @@ ctx.restore();
     if (state.paperType === 'legal') return state.orientation === 'horizontal' ? 'legal landscape' : 'legal';
     return `${(p.w / 2.54).toFixed(4)}in ${(p.h / 2.54).toFixed(4)}in`;
   }
+  // Preset que se edita: el resuelto para la hoja actual; si no hay, se crea uno para este tamaño.
+  function pcEnsure() {
+    const p = getPaperCm(); let cur = pcCur(p.w, p.h, false);
+    if (!cur) {
+      const k = pcKey(p.w, p.h);
+      cur = { id: pcId(), name: 'Hoja ' + pcKeyLabel(k), key: k, sx: 1, sy: 1, ox: 0, oy: 0 };
+      pcSt.presets.push(cur);
+    }
+    return cur;
+  }
   function pcRefresh() {
-    const p = getPaperCm(), c = pcGet(p.w, p.h), s = pcSheet(p.w, p.h, true);
-    const known = !!(pcStore[c.k] || PC_DEFAULTS[c.k]);
-    $('pcInfo').textContent = `Hoja del editor ${p.w}×${p.h} cm · hoja real ${s[0]}×${s[1]} cm` + (known ? '' : ' · sin calibrar');
-    $('pcInfo').classList.toggle('warn', !known);
-    $('pcOn').classList.toggle('active', c.on); $('pcOff').classList.toggle('active', !c.on);
-    $('pcOx').value = (c.ox * 10).toFixed(2); $('pcOy').value = (c.oy * 10).toFixed(2);
-    $('pcSx').value = (c.sx * 100).toFixed(2); $('pcSy').value = (c.sy * 100).toFixed(2);
+    const p = getPaperCm(), s = pcSheet(p.w, p.h, true), k = pcKey(p.w, p.h), cur = pcCur(p.w, p.h, false);
+    const sel = $('pcSel'); sel.innerHTML = '';
+    const o0 = document.createElement('option'); o0.value = 'auto'; o0.textContent = 'Automático (según tamaño de hoja)'; sel.appendChild(o0);
+    pcSt.presets.forEach(x => { const o = document.createElement('option'); o.value = x.id; o.textContent = `${x.name} · ${pcKeyLabel(x.key)}`; sel.appendChild(o); });
+    sel.value = pcSt.active;
+    let msg = `Hoja del editor ${p.w}×${p.h} cm · hoja real ${s[0]}×${s[1]} cm · `, warn = false;
+    if (!cur) { msg += 'sin preset para este tamaño: toca «+ Nuevo preset» y calibra'; warn = true; }
+    else { msg += `en uso: ${cur.name}`; if (cur.key !== k) { msg += ` (calibrado para ${pcKeyLabel(cur.key)})`; warn = true; } }
+    $('pcInfo').textContent = msg; $('pcInfo').classList.toggle('warn', warn);
+    $('pcOn').classList.toggle('active', pcSt.enabled); $('pcOff').classList.toggle('active', !pcSt.enabled);
+    $('pcName').value = cur ? cur.name : ''; $('pcName').disabled = !cur; $('pcDelBtn').disabled = !cur;
+    const v = cur || { ox: 0, oy: 0, sx: 1, sy: 1 };
+    $('pcOx').value = (v.ox * 10).toFixed(2); $('pcOy').value = (v.oy * 10).toFixed(2);
+    $('pcSx').value = (v.sx * 100).toFixed(2); $('pcSy').value = (v.sy * 100).toFixed(2);
   }
   const pcNum = (id) => { const v = parseFloat(String($(id).value).replace(',', '.')); return isFinite(v) ? v : null; };
   function pcReadFields() {
-    const p = getPaperCm(), c = pcGet(p.w, p.h);
+    const cur = pcEnsure();
     const ox = pcNum('pcOx'), oy = pcNum('pcOy'), sx = pcNum('pcSx'), sy = pcNum('pcSy');
-    if (ox !== null) c.ox = ox / 10; if (oy !== null) c.oy = oy / 10;
-    if (sx !== null) c.sx = Math.min(1.1, Math.max(0.9, sx / 100)); if (sy !== null) c.sy = Math.min(1.1, Math.max(0.9, sy / 100));
-    pcSave(c.k, c); pcRefresh();
+    if (ox !== null) cur.ox = ox / 10; if (oy !== null) cur.oy = oy / 10;
+    if (sx !== null) cur.sx = Math.min(1.1, Math.max(0.9, sx / 100)); if (sy !== null) cur.sy = Math.min(1.1, Math.max(0.9, sy / 100));
+    pcPersist(); pcRefresh();
   }
-  function pcSetOn(on) {
-    const p = getPaperCm(), c = pcGet(p.w, p.h); c.on = on; pcSave(c.k, c); pcRefresh();
+  function pcSetOn(on) { pcSt.enabled = on; pcPersist(); pcRefresh(); }
+  function pcNew() {
+    const p = getPaperCm(), cur = pcCur(p.w, p.h, false), b = cur || { sx: 1, sy: 1, ox: 0, oy: 0 };
+    const np = { id: pcId(), name: `Preset ${pcSt.presets.length + 1}`, key: pcKey(p.w, p.h), sx: b.sx, sy: b.sy, ox: b.ox, oy: b.oy };
+    pcSt.presets.push(np); pcSt.active = np.id; pcPersist(); pcRefresh();
+    showToast('Preset creado: ponle nombre y calibra', 'info', 1800);
+    try { $('pcName').focus(); $('pcName').select(); } catch (_) {}
+  }
+  function pcDelete() {
+    const p = getPaperCm(), cur = pcCur(p.w, p.h, false); if (!cur) return;
+    if (!window.confirm(`¿Eliminar el preset «${cur.name}»?`)) return;
+    pcSt.presets = pcSt.presets.filter(x => x.id !== cur.id);
+    if (pcSt.active === cur.id) pcSt.active = 'auto';
+    pcPersist(); pcRefresh(); showToast('Preset eliminado', 'info');
   }
   async function pcRunPrint(cvs, box, sizeRule) {
     const printArea = $('printArea'), oldHTML = printArea.innerHTML;
@@ -5638,14 +5700,14 @@ ctx.restore();
     g.fillText('Mide arriba / abajo / izquierda / derecha desde el borde de la hoja', cx * k, (cy + 1.2) * k);
     const box = act ? pcBox(p.w, p.h, sheet) : { w: p.w, h: p.h };
     const out = act ? pcTransform(cv, c, p.w, p.h, box) : cv;
-    pcStore.__last = { w: p.w, h: p.h, sheetW: sheet[0], sheetH: sheet[1], M, k: c.k, c0: act ? { sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { sx: 1, sy: 1, ox: 0, oy: 0 } };
+    pcSt.last = { w: p.w, h: p.h, sheetW: sheet[0], sheetH: sheet[1], M, k: c.k, c0: act ? { sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { sx: 1, sy: 1, ox: 0, oy: 0 } };
     pcPersist();
     showToast('Imprime al 100 % y luego mide los 4 márgenes', 'info', 2500);
     await pcRunPrint([out], box, pcSizeRule(p));
   }
   function pcCompute() {
     sfx.click();
-    const L = pcStore.__last;
+    const L = pcSt.last;
     if (!L) { showToast('Primero imprime la hoja de prueba', 'error'); return; }
     const PT = pcNum('pcMT'), PB = pcNum('pcMB'), PL = pcNum('pcML'), PR = pcNum('pcMR');
     if ([PT, PB, PL, PR].some(v => v === null || v < 0 || v > 5)) { showToast('Escribe los 4 márgenes medidos (cm)', 'error'); return; }
@@ -5655,21 +5717,25 @@ ctx.restore();
     const sx = ((L.sheetW - PR) - PL) / (dr - dl), ox = PL - sx * dl;
     const sy = ((L.sheetH - PB) - PT) / (db - dt), oy = PT - sy * dt;
     if (!(sx > 0.9 && sx < 1.1 && sy > 0.9 && sy < 1.1)) { showToast('Medidas raras: revisa que midas desde el borde de la hoja', 'error', 2500); return; }
-    const cur = pcGet(L.w, L.h);
-    pcSave(L.k, { on: true, sx, sy, ox, oy });
-    pcRefresh();
-    showToast('Compensación calculada y activada', 'info', 2000);
+    const cur = pcEnsure();
+    cur.sx = sx; cur.sy = sy; cur.ox = ox; cur.oy = oy; cur.key = L.k;
+    pcSt.enabled = true; pcPersist(); pcRefresh();
+    showToast(`Guardado en «${cur.name}»`, 'info', 2000);
   }
   function pcInit() {
     $('pcOn').addEventListener('click', () => pcSetOn(true));
     $('pcOff').addEventListener('click', () => pcSetOn(false));
     ['pcOx', 'pcOy', 'pcSx', 'pcSy'].forEach(id => $(id).addEventListener('change', pcReadFields));
+    $('pcSel').addEventListener('change', () => { pcSt.active = $('pcSel').value; pcPersist(); pcRefresh(); });
+    $('pcName').addEventListener('change', () => {
+      const p = getPaperCm(), cur = pcCur(p.w, p.h, false), n = $('pcName').value.trim();
+      if (cur && n) { cur.name = n; pcPersist(); }
+      pcRefresh();
+    });
+    $('pcNewBtn').addEventListener('click', pcNew);
+    $('pcDelBtn').addEventListener('click', pcDelete);
     $('pcTestBtn').addEventListener('click', pcTestPrint);
     $('pcCalcBtn').addEventListener('click', pcCompute);
-    $('pcResetBtn').addEventListener('click', () => {
-      const p = getPaperCm(), k = pcKey(p.w, p.h); delete pcStore[k]; pcPersist(); pcRefresh();
-      showToast('Valores restaurados', 'info');
-    });
   }
   pcInit();
 
@@ -7051,7 +7117,7 @@ ctx.restore();
       printArea.style.setProperty('--pw', `${ptW}pt`);
       printArea.style.setProperty('--ph', `${vp1.height.toFixed(4)}pt`);
       const pcWc = vp1.width / 72 * 2.54, pcHc = vp1.height / 72 * 2.54;
-      const pcC = pcGet(pcWc, pcHc), pcOn = pcActive(pcC);
+      const pcC = pcGet(pcWc, pcHc, true), pcOn = pcActive(pcC);
       const pcBx = pcOn ? pcBox(pcWc, pcHc, [pcWc, pcHc]) : null;
       if (pcBx) {
         printArea.style.setProperty('--pw', `${(pcBx.w / 2.54 * 72).toFixed(4)}pt`);
