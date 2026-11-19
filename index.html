@@ -658,6 +658,35 @@
   .ps-info { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; margin-top: 4px; } .ps-info.warn { color: var(--danger); }
   .ps-tab { display: none; margin-top: 6px; } .ps-tab.on { display: block; }
   .ps-hint { font-size: 11px; color: var(--muted); margin: 6px 0 0; line-height: 1.35; }
+
+  /* Panel compacto de compensación de impresora (compartido: impresión y póster) */
+  .pcp { margin: 6px 0; font-size: 11px; }
+  .pcp * { box-sizing: border-box; }
+  .pcp-top { display: flex; gap: 6px; align-items: stretch; }
+  .pcp .pcp-i { width: 100%; min-width: 0; height: 30px; padding: 0 7px; font-size: 12px; border-radius: 5px; margin: 0; }
+  .pcp select.pcp-i { flex: 1; }
+  .pcp-b { flex: none; min-width: 30px; height: 30px; padding: 0 8px; font-size: 11px; border-radius: 5px; border: 1px solid var(--line); background: var(--panel2); color: var(--text); cursor: pointer; }
+  .pcp-b.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .pcp-b:disabled { opacity: .4; }
+  .pcp-info { font-size: 10px; color: var(--muted); font-family: 'JetBrains Mono', monospace; margin: 3px 0 0; line-height: 1.3; }
+  .pcp-info.warn { color: var(--danger); }
+  .pcp-d { margin-top: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); }
+  .pcp-d > summary { cursor: pointer; padding: 6px 8px; font-size: 11px; font-weight: 600; color: var(--text); list-style: none; display: flex; justify-content: space-between; align-items: center; -webkit-tap-highlight-color: transparent; }
+  .pcp-d > summary::-webkit-details-marker { display: none; }
+  .pcp-d > summary::after { content: ""; width: 6px; height: 6px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); transition: transform .15s; margin-right: 2px; }
+  .pcp-d[open] > summary::after { transform: rotate(-135deg); }
+  .pcp-bd { padding: 0 8px 8px; }
+  .pcp-r { display: flex; gap: 5px; margin-top: 5px; }
+  .pcp-r > * { flex: 1; min-width: 0; }
+  .pcp-r > .pcp-b { flex: none; }
+  .pcp-r > .pcp-b.fl { flex: 1; }
+  .pcp-g { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-top: 5px; }
+  .pcp-g label { font-size: 9.5px; margin: 0 0 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pcp-g .pcp-i { padding: 0 4px; text-align: center; }
+  .pcp-sec { font-size: 10px; color: var(--muted); margin: 7px 0 0; }
+  .pcp-n { margin-top: 6px; font-size: 10px; color: var(--muted); }
+  .pcp-n > summary { cursor: pointer; font-size: 10px; }
+  .pcp-n p { margin: 3px 0 0; line-height: 1.35; }
   #posterModal { z-index: 110; position: fixed; inset: 0; height: 100dvh; padding: 0; overflow: hidden; align-items: stretch; justify-content: stretch; background: var(--bg); backdrop-filter: none; }
   #posterModal .pe { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 0; color: var(--text); background: var(--bg); overscroll-behavior: contain; }
   #posterModal .pe svg { width: 16px; height: 16px; flex: none; display: block; pointer-events: none; }
@@ -2138,43 +2167,7 @@
       <label>Doble cara (dúplex manual)</label>
       <!-- FIX 1: "Solo frente" -> "Todas" -->
       <div class="toggle"><button id="printDuplexOff" class="active">Todas</button><button id="printDuplexOdd">Frente (impares)</button><button id="printDuplexEven">Reverso (pares)</button></div>
-      <div class="hint" style="margin:8px 0;padding:8px;border-radius:6px;line-height:1.4">Tamaño físico: para que las medidas en cm sean exactas, en el diálogo de impresión selecciona <b>Tamaño real / 100%</b> y desactiva «Ajustar a página». La impresora puede tener márgenes no imprimibles.</div>
-      <details id="pcDetails" style="margin:8px 0">
-        <summary style="font-size:12px;font-weight:600;cursor:pointer;color:var(--text)">Compensación de impresora</summary>
-        <div class="adjust-box">
-          <div class="toggle"><button id="pcOn">Activada</button><button id="pcOff">Desactivada</button></div>
-          <label>Preset de compensación</label>
-          <select id="pcSel"></select>
-          <label>Nombre del preset</label>
-          <input type="text" id="pcName" />
-          <div class="row" style="margin-top:6px">
-            <button class="btn" id="pcNewBtn">+ Nuevo preset</button>
-            <button class="btn" id="pcDelBtn">Eliminar preset</button>
-          </div>
-          <div class="ps-info" id="pcInfo"></div>
-          <div class="row">
-            <div><label>Desplazamiento X (mm)</label><input type="text" inputmode="decimal" id="pcOx" /></div>
-            <div><label>Desplazamiento Y (mm)</label><input type="text" inputmode="decimal" id="pcOy" /></div>
-          </div>
-          <div class="row">
-            <div><label>Escala X (%)</label><input type="text" inputmode="decimal" id="pcSx" /></div>
-            <div><label>Escala Y (%)</label><input type="text" inputmode="decimal" id="pcSy" /></div>
-          </div>
-          <div class="ps-hint">Valores = lo que hace tu impresora (negativo = corre el dibujo hacia arriba/izquierda). El editor dibuja al revés para cancelarlo.</div>
-          <button class="btn full" id="pcTestBtn">1) Imprimir hoja de prueba</button>
-          <div class="ps-hint">Mide con regla, desde el borde de la hoja hasta el centro de la línea del marco (cm):</div>
-          <div class="row">
-            <div><label>Arriba</label><input type="text" inputmode="decimal" id="pcMT" /></div>
-            <div><label>Abajo</label><input type="text" inputmode="decimal" id="pcMB" /></div>
-          </div>
-          <div class="row">
-            <div><label>Izquierda</label><input type="text" inputmode="decimal" id="pcML" /></div>
-            <div><label>Derecha</label><input type="text" inputmode="decimal" id="pcMR" /></div>
-          </div>
-          <button class="btn full" id="pcCalcBtn">2) Calcular compensación</button>
-          <div class="ps-hint">Cada preset guarda su propia compensación. En «Automático» se usa el preset calibrado para el tamaño de hoja actual (carta, oficio…). Tras calcular, vuelve a imprimir la hoja de prueba: los 4 márgenes deben salir de 1 cm. La zona que la impresora no imprime (~0.3–0.4 cm del borde) no se puede compensar.</div>
-        </div>
-      </details>
+      <div class="pcp-host"></div>
       <label>Vista previa</label>
       <div class="print-preview" id="printPreview"></div>
       <button class="cta full" id="doPrintBtn" style="margin-top: 12px;">Imprimir ahora</button>
@@ -5613,37 +5606,75 @@ ctx.restore();
     }
     return cur;
   }
+  /* ---- Panel compacto (se monta en cada .pcp-host: impresión y editor de póster) ---- */
+  const PCP_HTML = `<div class="pcp">
+    <div class="pcp-top"><select class="pcp-i" data-pc="sel" aria-label="Preset de compensación"></select><button type="button" class="pcp-b" data-pc="tog"></button></div>
+    <div class="pcp-info" data-pc="info"></div>
+    <details class="pcp-d"><summary>Calibrar / editar preset</summary><div class="pcp-bd">
+      <div class="pcp-r"><input type="text" class="pcp-i" data-pc="name" placeholder="Nombre del preset"><button type="button" class="pcp-b" data-pc="new" title="Nuevo preset">+ Nuevo</button><button type="button" class="pcp-b" data-pc="del" title="Eliminar preset">Eliminar</button></div>
+      <div class="pcp-g">
+        <div><label>X (mm)</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="ox"></div>
+        <div><label>Y (mm)</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="oy"></div>
+        <div><label>Esc. X %</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="sx"></div>
+        <div><label>Esc. Y %</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="sy"></div>
+      </div>
+      <div class="pcp-r"><button type="button" class="pcp-b fl" data-pc="test">1) Hoja de prueba</button></div>
+      <div class="pcp-sec">Mide con regla del borde de la hoja al centro de la línea (cm):</div>
+      <div class="pcp-g">
+        <div><label>Arriba</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mt"></div>
+        <div><label>Abajo</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mb"></div>
+        <div><label>Izq.</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="ml"></div>
+        <div><label>Der.</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mr"></div>
+      </div>
+      <div class="pcp-r"><button type="button" class="pcp-b fl" data-pc="calc">2) Calcular compensación</button></div>
+      <details class="pcp-n"><summary>Ayuda</summary>
+        <p><b>Tamaño real:</b> en el diálogo de impresión elige «Tamaño real / 100 %» y desactiva «Ajustar a página».</p>
+        <p>Los valores son lo que hace tu impresora (negativo = corre el dibujo hacia arriba/izquierda); el editor dibuja al revés para cancelarlo. Cada preset guarda su compensación; «Automático» usa el preset calibrado para el tamaño de hoja actual. Tras calcular, vuelve a imprimir la hoja de prueba: los 4 márgenes deben salir de 1 cm. La zona no imprimible (~0.3–0.4 cm del borde) no se puede compensar.</p>
+      </details>
+    </div></details>
+  </div>`;
+  const pcAll = (n) => document.querySelectorAll('.pcp [data-pc="' + n + '"]');
+  const pcQ = (root, n) => root.querySelector('[data-pc="' + n + '"]');
+  function pcMountAll() {
+    document.querySelectorAll('.pcp-host').forEach(h => { if (!h.firstChild) h.innerHTML = PCP_HTML; });
+    pcRefresh();
+  }
   function pcRefresh() {
     const p = getPaperCm(), s = pcSheet(p.w, p.h, true), k = pcKey(p.w, p.h), cur = pcCur(p.w, p.h, false);
-    const sel = $('pcSel'); sel.innerHTML = '';
-    const o0 = document.createElement('option'); o0.value = 'auto'; o0.textContent = 'Automático (según tamaño de hoja)'; sel.appendChild(o0);
-    pcSt.presets.forEach(x => { const o = document.createElement('option'); o.value = x.id; o.textContent = `${x.name} · ${pcKeyLabel(x.key)}`; sel.appendChild(o); });
-    sel.value = pcSt.active;
-    let msg = `Hoja del editor ${p.w}×${p.h} cm · hoja real ${s[0]}×${s[1]} cm · `, warn = false;
-    if (!cur) { msg += 'sin preset para este tamaño: toca «+ Nuevo preset» y calibra'; warn = true; }
-    else { msg += `en uso: ${cur.name}`; if (cur.key !== k) { msg += ` (calibrado para ${pcKeyLabel(cur.key)})`; warn = true; } }
-    $('pcInfo').textContent = msg; $('pcInfo').classList.toggle('warn', warn);
-    $('pcOn').classList.toggle('active', pcSt.enabled); $('pcOff').classList.toggle('active', !pcSt.enabled);
-    $('pcName').value = cur ? cur.name : ''; $('pcName').disabled = !cur; $('pcDelBtn').disabled = !cur;
+    let msg = `Hoja ${p.w}×${p.h} cm`, warn = false;
+    if (s[0] !== p.w || s[1] !== p.h) msg += ` (real ${s[0]}×${s[1]})`;
+    if (!cur) { msg += ' · sin preset: toca «+ Nuevo» y calibra'; warn = true; }
+    else { msg += ` · ${cur.name}`; if (cur.key !== k) { msg += ` (calibrado p/ ${pcKeyLabel(cur.key)})`; warn = true; } }
     const v = cur || { ox: 0, oy: 0, sx: 1, sy: 1 };
-    $('pcOx').value = (v.ox * 10).toFixed(2); $('pcOy').value = (v.oy * 10).toFixed(2);
-    $('pcSx').value = (v.sx * 100).toFixed(2); $('pcSy').value = (v.sy * 100).toFixed(2);
+    document.querySelectorAll('.pcp').forEach(root => {
+      const sel = pcQ(root, 'sel'); sel.innerHTML = '';
+      const o0 = document.createElement('option'); o0.value = 'auto'; o0.textContent = 'Automático (según tamaño de hoja)'; sel.appendChild(o0);
+      pcSt.presets.forEach(x => { const o = document.createElement('option'); o.value = x.id; o.textContent = `${x.name} · ${pcKeyLabel(x.key)}`; sel.appendChild(o); });
+      sel.value = pcSt.active;
+      const info = pcQ(root, 'info'); info.textContent = msg; info.classList.toggle('warn', warn);
+      const tog = pcQ(root, 'tog'); tog.textContent = pcSt.enabled ? 'Activada' : 'Desactivada'; tog.classList.toggle('on', pcSt.enabled);
+      const nm = pcQ(root, 'name'); if (document.activeElement !== nm) nm.value = cur ? cur.name : ''; nm.disabled = !cur;
+      pcQ(root, 'del').disabled = !cur;
+      const set = (n, val) => { const el = pcQ(root, n); if (document.activeElement !== el) el.value = val; };
+      set('ox', (v.ox * 10).toFixed(2)); set('oy', (v.oy * 10).toFixed(2));
+      set('sx', (v.sx * 100).toFixed(2)); set('sy', (v.sy * 100).toFixed(2));
+    });
   }
-  const pcNum = (id) => { const v = parseFloat(String($(id).value).replace(',', '.')); return isFinite(v) ? v : null; };
-  function pcReadFields() {
+  const pcNum = (el) => { const v = parseFloat(String(el && el.value).replace(',', '.')); return isFinite(v) ? v : null; };
+  function pcReadFields(root) {
     const cur = pcEnsure();
-    const ox = pcNum('pcOx'), oy = pcNum('pcOy'), sx = pcNum('pcSx'), sy = pcNum('pcSy');
+    const ox = pcNum(pcQ(root, 'ox')), oy = pcNum(pcQ(root, 'oy')), sx = pcNum(pcQ(root, 'sx')), sy = pcNum(pcQ(root, 'sy'));
     if (ox !== null) cur.ox = ox / 10; if (oy !== null) cur.oy = oy / 10;
     if (sx !== null) cur.sx = Math.min(1.1, Math.max(0.9, sx / 100)); if (sy !== null) cur.sy = Math.min(1.1, Math.max(0.9, sy / 100));
     pcPersist(); pcRefresh();
   }
   function pcSetOn(on) { pcSt.enabled = on; pcPersist(); pcRefresh(); }
-  function pcNew() {
+  function pcNew(root) {
     const p = getPaperCm(), cur = pcCur(p.w, p.h, false), b = cur || { sx: 1, sy: 1, ox: 0, oy: 0 };
     const np = { id: pcId(), name: `Preset ${pcSt.presets.length + 1}`, key: pcKey(p.w, p.h), sx: b.sx, sy: b.sy, ox: b.ox, oy: b.oy };
     pcSt.presets.push(np); pcSt.active = np.id; pcPersist(); pcRefresh();
     showToast('Preset creado: ponle nombre y calibra', 'info', 1800);
-    try { $('pcName').focus(); $('pcName').select(); } catch (_) {}
+    try { const n = pcQ(root, 'name'); n.focus(); n.select(); } catch (_) {}
   }
   function pcDelete() {
     const p = getPaperCm(), cur = pcCur(p.w, p.h, false); if (!cur) return;
@@ -5705,11 +5736,11 @@ ctx.restore();
     showToast('Imprime al 100 % y luego mide los 4 márgenes', 'info', 2500);
     await pcRunPrint([out], box, pcSizeRule(p));
   }
-  function pcCompute() {
+  function pcCompute(root) {
     sfx.click();
     const L = pcSt.last;
     if (!L) { showToast('Primero imprime la hoja de prueba', 'error'); return; }
-    const PT = pcNum('pcMT'), PB = pcNum('pcMB'), PL = pcNum('pcML'), PR = pcNum('pcMR');
+    const PT = pcNum(pcQ(root, 'mt')), PB = pcNum(pcQ(root, 'mb')), PL = pcNum(pcQ(root, 'ml')), PR = pcNum(pcQ(root, 'mr'));
     if ([PT, PB, PL, PR].some(v => v === null || v < 0 || v > 5)) { showToast('Escribe los 4 márgenes medidos (cm)', 'error'); return; }
     const c0 = L.c0;
     const dl = (L.M - c0.ox) / c0.sx, dr = (L.w - L.M - c0.ox) / c0.sx;
@@ -5723,19 +5754,28 @@ ctx.restore();
     showToast(`Guardado en «${cur.name}»`, 'info', 2000);
   }
   function pcInit() {
-    $('pcOn').addEventListener('click', () => pcSetOn(true));
-    $('pcOff').addEventListener('click', () => pcSetOn(false));
-    ['pcOx', 'pcOy', 'pcSx', 'pcSy'].forEach(id => $(id).addEventListener('change', pcReadFields));
-    $('pcSel').addEventListener('change', () => { pcSt.active = $('pcSel').value; pcPersist(); pcRefresh(); });
-    $('pcName').addEventListener('change', () => {
-      const p = getPaperCm(), cur = pcCur(p.w, p.h, false), n = $('pcName').value.trim();
-      if (cur && n) { cur.name = n; pcPersist(); }
-      pcRefresh();
+    pcMountAll();
+    const rootOf = (t) => t.closest('.pcp');
+    document.addEventListener('click', (e) => {
+      const t = e.target.closest && e.target.closest('.pcp [data-pc]'); if (!t) return;
+      const root = rootOf(t), a = t.dataset.pc;
+      if (a === 'tog') pcSetOn(!pcSt.enabled);
+      else if (a === 'new') pcNew(root);
+      else if (a === 'del') pcDelete();
+      else if (a === 'test') pcTestPrint();
+      else if (a === 'calc') pcCompute(root);
     });
-    $('pcNewBtn').addEventListener('click', pcNew);
-    $('pcDelBtn').addEventListener('click', pcDelete);
-    $('pcTestBtn').addEventListener('click', pcTestPrint);
-    $('pcCalcBtn').addEventListener('click', pcCompute);
+    document.addEventListener('change', (e) => {
+      const t = e.target.closest && e.target.closest('.pcp [data-pc]'); if (!t) return;
+      const root = rootOf(t), a = t.dataset.pc;
+      if (['ox', 'oy', 'sx', 'sy'].includes(a)) pcReadFields(root);
+      else if (a === 'sel') { pcSt.active = t.value; pcPersist(); pcRefresh(); }
+      else if (a === 'name') {
+        const p = getPaperCm(), cur = pcCur(p.w, p.h, false), n = t.value.trim();
+        if (cur && n) { cur.name = n; pcPersist(); }
+        pcRefresh();
+      }
+    });
   }
   pcInit();
 
@@ -10086,6 +10126,7 @@ document.addEventListener('pointerdown', (e) => {
         </div>
         <div class="ps-tab" data-tab="5">
           <div class="ps-hint" style="padding:6px;border:1px solid var(--line);border-radius:6px;margin:0 0 8px">Máxima fija: 300 dpi · PNG sin pérdida</div>
+          <div class="pcp-host"></div>
           <button type="button" class="cta" data-pa="pages">${PSI.plus}Añadir hojas como páginas</button>
           <button type="button" class="btn full" data-pa="replace">${PSI.layers}Reemplazar todas las páginas</button>
           <button type="button" class="btn full cyan" data-pa="pdf">${PSI.download}Descargar PDF</button>
@@ -10106,7 +10147,7 @@ document.addEventListener('pointerdown', (e) => {
       <input type="range" id="peQ" min="10" max="400" step="1" aria-label="Ajuste rápido">
     </div>
   </div></div>`);
-  document.body.appendChild(posterModal);
+  document.body.appendChild(posterModal); pcMountAll();
   const psBox = posterModal.querySelector('.pe');
   psBox.querySelectorAll('.pe-opts').forEach(box => { const sel = psBox.querySelector(box.dataset.for); if (sel) box.innerHTML = Array.from(sel.options).map(o => `<button type="button" class="pe-opt" data-v="${o.value}">${o.textContent}</button>`).join(''); });
   function psSync() {
@@ -10180,6 +10221,7 @@ document.addEventListener('pointerdown', (e) => {
     if (k === 'mLink' && PS.mLink) PS.mR = PS.mT = PS.mB = PS.mL;
     if (k === 'snapStep') PS.snapStep = Math.max(0.01, Math.min(5, Number(PS.snapStep) || 0.1));
     if (k === 'offX' || k === 'offY') PS[k] = Number(PS[k]) || 0;
+    if (k === 'paper') pcRefresh();
     psClampSize(); PS.dpi = 300;
     psSync(); psDraw();
   }
@@ -10433,7 +10475,7 @@ document.addEventListener('pointerdown', (e) => {
   }
   try { const vv = window.visualViewport; if (vv) { vv.addEventListener('resize', psFit); vv.addEventListener('scroll', psFit); } } catch (_) {}
   window.addEventListener('resize', psFit); document.addEventListener('focusin', () => setTimeout(psFit, 150)); document.addEventListener('focusout', () => setTimeout(psFit, 150));
-  function openPoster() { psOpen = true; if (!PS.img) { PS.tab = 0; PS.pOpen = true; } PS.tool = 'img'; psFit(); psSync(); posterModal.classList.add('show'); setTimeout(() => { posterModal.classList.add('visible'); psFit(); psSync(); psDraw(); }, 20); }
+  function openPoster() { psOpen = true; pcRefresh(); if (!PS.img) { PS.tab = 0; PS.pOpen = true; } PS.tool = 'img'; psFit(); psSync(); posterModal.classList.add('show'); setTimeout(() => { posterModal.classList.add('visible'); psFit(); psSync(); psDraw(); }, 20); }
   function closePoster() { psOpen = false; posterModal.classList.remove('visible'); setTimeout(() => posterModal.classList.remove('show'), 200); }
   /* ====== RECORTE DE IMAGEN ====== */
   // Rectángulo que ocupa la imagen dentro del marco (en cm), replicando el render de exportación.
