@@ -2204,6 +2204,7 @@
       <label>Doble cara</label>
       <!-- FIX 1: "Solo frente" -> "Todas" -->
       <div class="toggle"><button id="pdfDuplexOff" class="active">Todas</button><button id="pdfDuplexOdd">Frente </button><button id="pdfDuplexEven">Reverso </button></div>
+      <div class="pcp-host"></div>
       <label>Vista previa</label>
       <div class="print-preview" id="pdfPrintPreview"></div>
       <button class="cta full" id="doPdfPrintBtn" style="margin-top: 12px;">Imprimir ahora</button>
@@ -5517,7 +5518,7 @@ ctx.restore();
   }
   function openPrintModal() {
     $('printFrom').max = state.pages.length; $('printTo').max = state.pages.length;
-    $('printFrom').value = 1; $('printTo').value = state.pages.length; pcRefresh();
+    $('printFrom').value = 1; $('printTo').value = state.pages.length; pcDocCtx = null; pcRefresh();
     setPrintScope('all'); setPrintDuplex('off');
     const m = $('printModal'); m.classList.add('show'); setTimeout(() => m.classList.add('visible'), 10);
   }
@@ -5580,22 +5581,35 @@ ctx.restore();
   // Calibración para una hoja (tamaño + orientación). Un preset = una hoja en una orientación.
   //  exact = preset de esa hoja; rot = solo existe la orientación contraria (estimación: escalas X/Y intercambiadas);
   //  none = sin calibrar. Un preset fijado a mano solo se usa si es de esta hoja; si no, se busca el automático.
-  function pcFind(w, h) {
-    const k = pcKey(w, h), kr = pcKey(h, w);
+  const PC_TOL = 0.45;
+  // Busca el preset cuya hoja física (la del @page) sea la más cercana (tolerancia 4.5 mm). swap = orientación contraria.
+  function pcMatch(W, H, swap) {
+    let best = null, bd = 1e9;
+    pcSt.presets.forEach(x => {
+      const d = pcParseKey(x.key); if (!(d[0] > 0 && d[1] > 0)) return;
+      const e = swap ? Math.max(Math.abs(d[0] - H), Math.abs(d[1] - W)) : Math.max(Math.abs(d[0] - W), Math.abs(d[1] - H));
+      if (e < bd) { bd = e; best = x; }
+    });
+    return bd <= PC_TOL ? best : null;
+  }
+  // El preset depende de la HOJA FÍSICA que recibe la impresora (@page), no del tamaño del dibujo.
+  // type: tipo de papel del editor ('carta', 'legal', 'custom'…) o 'sheet' si w×h ya es la hoja real (lector PDF).
+  function pcFind(w, h, type) {
+    const sh = pcSheet(w, h, true, type), k = pcKey(sh[0], sh[1]), kr = pcKey(sh[1], sh[0]);
     let pinMiss = false;
     if (pcSt.active !== 'auto') {
       const a = pcSt.presets.find(x => x.id === pcSt.active);
-      if (a && a.key === k) return { preset: a, kind: 'exact', cal: a, k };
+      if (a) { const d = pcParseKey(a.key); if (Math.max(Math.abs(d[0] - sh[0]), Math.abs(d[1] - sh[1])) <= PC_TOL) return { preset: a, kind: 'exact', cal: a, k, sheet: sh }; }
       pinMiss = true;
     }
-    let q = pcSt.presets.find(x => x.key === k);
-    if (q) return { preset: q, kind: 'exact', cal: q, k, pinMiss };
-    q = pcSt.presets.find(x => x.key === kr);
-    if (q) return { preset: q, kind: 'rot', cal: { sx: q.sy, sy: q.sx, ox: 0, oy: 0 }, k, from: kr, pinMiss };
-    return { preset: null, kind: 'none', cal: null, k, pinMiss };
+    let q = pcMatch(sh[0], sh[1], false);
+    if (q) return { preset: q, kind: 'exact', cal: q, k, pinMiss, sheet: sh };
+    q = pcMatch(sh[0], sh[1], true);
+    if (q) return { preset: q, kind: 'rot', cal: { sx: q.sy, sy: q.sx, ox: 0, oy: 0 }, k, from: q.key, pinMiss, sheet: sh };
+    return { preset: null, kind: 'none', cal: null, k, pinMiss, sheet: sh };
   }
-  function pcGet(w, h) {
-    const r = pcFind(w, h);
+  function pcGet(w, h, type) {
+    const r = pcFind(w, h, type);
     return (r.cal && pcSt.enabled) ? { k: r.k, on: true, kind: r.kind, sx: r.cal.sx, sy: r.cal.sy, ox: r.cal.ox, oy: r.cal.oy } : { k: r.k, on: false, kind: r.kind, sx: 1, sy: 1, ox: 0, oy: 0 };
   }
   const pcActive = (c) => c.on && (c.sx !== 1 || c.sy !== 1 || c.ox !== 0 || c.oy !== 0);
@@ -5626,30 +5640,33 @@ ctx.restore();
     return `${(w / 2.54).toFixed(4)}in ${(h / 2.54).toFixed(4)}in`;
   }
   // Hoja que se está calibrando en el panel (puede ser distinta a la del documento).
+  let pcDocCtx = null; // {w,h,type:'sheet'} cuando se imprime un PDF (hoja real); null = documento del editor
+  const pcCur = () => pcDocCtx ? { w: pcDocCtx.w, h: pcDocCtx.h, type: 'sheet' } : Object.assign({}, getPaperCm(), { type: state.paperType });
   function pcTarget() {
-    const t = pcSt.target, cur = getPaperCm(); let w, h, type;
+    const t = pcSt.target, cur = pcCur(); let w, h, type;
     if (t.size === 'custom') { w = Number(t.cw) || 21.3; h = Number(t.ch) || 27.6; type = 'custom'; }
     else if (t.size !== 'cur' && PAPERS[t.size]) { [w, h] = PAPERS[t.size]; type = t.size; }
-    else { w = cur.w; h = cur.h; type = state.paperType; }
+    else { w = cur.w; h = cur.h; type = cur.type; }
     const lo = Math.min(w, h), hi = Math.max(w, h);
     if (t.orient === 'v') { w = lo; h = hi; }
     else if (t.orient === 'h') { w = hi; h = lo; }
-    else if (t.size !== 'cur') { if (state.orientation === 'horizontal') { w = hi; h = lo; } else { w = lo; h = hi; } }
+    else if (t.size !== 'cur') { const hor = pcDocCtx ? pcDocCtx.w > pcDocCtx.h : state.orientation === 'horizontal'; if (hor) { w = hi; h = lo; } else { w = lo; h = hi; } }
     return { w, h, type };
   }
   // Preset editable de una hoja: se crea (con nombre automático) a partir de la estimación o de cero.
-  function pcEnsure(w, h) {
-    const r = pcFind(w, h);
+  function pcEnsure(w, h, type) {
+    const r = pcFind(w, h, type);
     if (r.kind === 'exact') return r.preset;
     const c = r.cal || { sx: 1, sy: 1, ox: 0, oy: 0 };
-    const np = { id: pcId(), name: pcAutoName(w, h), key: r.k, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy };
+    const np = { id: pcId(), name: pcAutoName(r.sheet[0], r.sheet[1]), key: r.k, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy };
     pcSt.presets.push(np); return np;
   }
   // Huecos de prueba por hoja: cada prueba usa un lugar distinto a lo largo de los bordes.
   const PC_STEP = 2, PC_START = 3, PC_TICK = 1.2;
   const pcSlots = (w, h) => Math.max(1, Math.min(12, Math.floor((w - 2 * PC_START) / PC_STEP) + 1, Math.floor((h - 2 * PC_START) / PC_STEP) + 1));
   const pcSlotSt = (k) => (pcSt.slots[k] || (pcSt.slots[k] = { next: 0, no: 1 }));
-  const pcExpected = (t) => ({ top: t.M, left: t.M, bottom: t.sheetH - (t.h - t.M), right: t.sheetW - (t.w - t.M) });
+  // top/left = del borde de la hoja a la rayita; bottom = alto entre rayitas; right = ancho entre rayitas (no dependen del tamaño real de la hoja)
+  const pcExpected = (t) => ({ top: t.M, left: t.M, bottom: t.h - 2 * t.M, right: t.w - 2 * t.M });
   const PCP_SIZES = '<option value="cur">Hoja del documento</option>' + Object.keys(PAPERS).map(id => `<option value="${id}">${PC_NAMES[id] || id} ${PAPERS[id][0]}×${PAPERS[id][1]}</option>`).join('') + '<option value="custom">Personalizada…</option>';
 
   /* ---- Panel compacto (se monta en cada .pcp-host: impresión y editor de póster) ---- */
@@ -5669,19 +5686,19 @@ ctx.restore();
         <div><label>Esc. Y %</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="sy"></div>
       </div>
       <div class="pcp-r"><button type="button" class="pcp-b fl" data-pc="test">1) Imprimir prueba</button><button type="button" class="pcp-b" data-pc="newsheet" title="Pon otra hoja en blanco y empieza desde la prueba 1">Hoja nueva</button></div>
-      <div class="pcp-sec">2) Mide con regla (cm) del borde de la hoja a cada rayita:</div>
+      <div class="pcp-sec">2) Mide con regla (cm). Arriba e Izq.: del borde de la hoja a la rayita. Alto y Ancho: distancia entre las dos rayitas opuestas (de rayita a rayita):</div>
       <div class="pcp-r"><select class="pcp-i" data-pc="tsel" aria-label="Prueba a medir"></select></div>
       <div class="pcp-g">
         <div><label>Arriba</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mt"></div>
-        <div><label>Abajo</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mb"></div>
+        <div><label>Alto ↕</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mb"></div>
         <div><label>Izq.</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="ml"></div>
-        <div><label>Der.</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mr"></div>
+        <div><label>Ancho ↔</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mr"></div>
       </div>
       <div class="pcp-r"><button type="button" class="pcp-b fl" data-pc="calc">3) Calcular y guardar preset</button></div>
       <details class="pcp-n"><summary>Ayuda</summary>
         <p><b>Tamaño real:</b> en el diálogo de impresión elige «Tamaño real / 100 %» y desactiva «Ajustar a página».</p>
-        <p><b>Un preset por hoja y orientación:</b> elige la hoja (carta, oficio, personalizada…) y su orientación, imprime la prueba, mide y calcula: se crea o actualiza el preset de esa hoja. Repite para cada hoja y orientación que uses. Al imprimir, «Automático» elige solo el preset que coincide con la hoja y orientación del documento.</p>
-        <p><b>Pruebas:</b> cada prueba imprime 4 rayitas numeradas (arriba, abajo, izquierda, derecha) en un lugar distinto de la hoja; vuelve a meter la misma hoja para la siguiente. Los campos de medida muestran en gris el valor esperado.</p>
+        <p><b>Un preset por hoja y orientación:</b> elige la hoja (carta, oficio, personalizada…) y su orientación, imprime la prueba, mide y calcula: se crea o actualiza el preset de esa hoja. Repite para cada hoja y orientación que uses. El preset depende de la HOJA FÍSICA que recibe la impresora (carta = 21.59×27.94), así que el mismo preset se usa en el editor, el póster y el lector de PDF. «Automático» elige el que coincide (tolerancia 4.5 mm).</p>
+        <p><b>Pruebas:</b> cada prueba imprime 4 rayitas numeradas (arriba, abajo, izquierda, derecha); la escala se calcula con la distancia entre rayitas opuestas, sin depender del tamaño de la hoja en un lugar distinto de la hoja; vuelve a meter la misma hoja para la siguiente. Los campos de medida muestran en gris el valor esperado.</p>
         <p>Si solo existe la orientación contraria, se usa una estimación (escalas intercambiadas) hasta que calibres esa orientación. Negativo = la impresora corre el dibujo hacia arriba/izquierda; el editor dibuja al revés para cancelarlo. La zona no imprimible (~0.3–0.4 cm del borde) no se puede compensar.</p>
       </details>
     </div></details>
@@ -5694,7 +5711,7 @@ ctx.restore();
   const pcPending = () => pcSt.tests.filter(t => !t.done);
   function pcStatus(r, w, h) {
     const pn = r.preset ? r.preset.name : '';
-    let msg = `${w}×${h} cm (${pcOrient(w, h)})`, warn = false;
+    let msg = `hoja ${r.sheet[0].toFixed(2)}×${r.sheet[1].toFixed(2)} cm (${pcOrient(w, h)})`, warn = false;
     if (r.kind === 'exact') msg += ` · ${pn} ✓`;
     else if (r.kind === 'rot') { msg += ` · estimada desde ${pcKeyLabel(r.from)}: calibra esta orientación`; warn = true; }
     else { msg += ' · sin calibrar: imprime una prueba'; warn = true; }
@@ -5702,8 +5719,8 @@ ctx.restore();
     return { msg, warn };
   }
   function pcRefresh() {
-    const doc = getPaperCm(), rd = pcFind(doc.w, doc.h), sd = pcStatus(rd, doc.w, doc.h);
-    const T = pcTarget(), rt = pcFind(T.w, T.h), st = pcStatus(rt, T.w, T.h), sheet = pcSheet(T.w, T.h, true, T.type);
+    const doc = pcCur(), rd = pcFind(doc.w, doc.h, doc.type), sd = pcStatus(rd, doc.w, doc.h);
+    const T = pcTarget(), rt = pcFind(T.w, T.h, T.type), st = pcStatus(rt, T.w, T.h), sheet = pcSheet(T.w, T.h, true, T.type);
     const v = rt.cal || { ox: 0, oy: 0, sx: 1, sy: 1 };
     const n = pcSlots(T.w, T.h), used = pcSlotSt(rt.k).next;
     const pend = pcPending();
@@ -5736,7 +5753,7 @@ ctx.restore();
   }
   const pcNum = (el) => { const v = parseFloat(String(el && el.value).replace(',', '.')); return isFinite(v) ? v : null; };
   function pcReadFields(root) {
-    const T = pcTarget(), cur = pcEnsure(T.w, T.h);
+    const T = pcTarget(), cur = pcEnsure(T.w, T.h, T.type);
     const ox = pcNum(pcQ(root, 'ox')), oy = pcNum(pcQ(root, 'oy')), sx = pcNum(pcQ(root, 'sx')), sy = pcNum(pcQ(root, 'sy'));
     if (ox !== null) cur.ox = ox / 10; if (oy !== null) cur.oy = oy / 10;
     if (sx !== null) cur.sx = Math.min(1.1, Math.max(0.9, sx / 100)); if (sy !== null) cur.sy = Math.min(1.1, Math.max(0.9, sy / 100));
@@ -5744,14 +5761,14 @@ ctx.restore();
   }
   function pcSetOn(on) { pcSt.enabled = on; pcPersist(); pcRefresh(); }
   function pcDelete() {
-    const T = pcTarget(), r = pcFind(T.w, T.h); if (r.kind !== 'exact') return;
+    const T = pcTarget(), r = pcFind(T.w, T.h, T.type); if (r.kind !== 'exact') return;
     if (!window.confirm(`¿Eliminar el preset «${r.preset.name}»?`)) return;
     pcSt.presets = pcSt.presets.filter(x => x.id !== r.preset.id);
     if (pcSt.active === r.preset.id) pcSt.active = 'auto';
     pcPersist(); pcRefresh(); showToast('Preset eliminado', 'info');
   }
   function pcNewSheet() {
-    const T = pcTarget(), sl = pcSlotSt(pcKey(T.w, T.h)); sl.next = 0; sl.no += 1;
+    const T = pcTarget(), shn = pcSheet(T.w, T.h, true, T.type), sl = pcSlotSt(pcKey(shn[0], shn[1])); sl.next = 0; sl.no += 1;
     pcPersist(); pcRefresh(); showToast('Hoja nueva: la siguiente prueba será la 1', 'info', 1800);
   }
   async function pcRunPrint(cvs, box, sizeRule) {
@@ -5785,7 +5802,7 @@ ctx.restore();
   }
   async function pcTestPrint() {
     sfx.click();
-    const T = pcTarget(), c = pcGet(T.w, T.h), act = pcActive(c), sheet = pcSheet(T.w, T.h, true, T.type), k = pcKey(T.w, T.h);
+    const T = pcTarget(), c = pcGet(T.w, T.h, T.type), act = pcActive(c), sheet = pcSheet(T.w, T.h, true, T.type), k = pcKey(sheet[0], sheet[1]);
     const n = pcSlots(T.w, T.h), sl = pcSlotSt(k), i = sl.next;
     if (i >= n) { showToast('Hoja llena: toca «Hoja nueva» y pon otra hoja', 'info', 2500); pcRefresh(); return; }
     const M = 1, kk = 300 / 2.54;
@@ -5806,7 +5823,7 @@ ctx.restore();
     g.textAlign = 'center'; g.fillText(lab, xi * kk, (M + 0.4) * kk); g.fillText(lab, xi * kk, (T.h - M - 0.4) * kk);
     const box = act ? pcBox(T.w, T.h, sheet) : { w: T.w, h: T.h };
     const out = act ? pcTransform(cv, c, T.w, T.h, box) : cv;
-    const t = { id: pcId(), n: i + 1, s: sl.no, k, w: T.w, h: T.h, sheetW: sheet[0], sheetH: sheet[1], M, c0: act ? { sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { sx: 1, sy: 1, ox: 0, oy: 0 }, done: false };
+    const t = { id: pcId(), n: i + 1, s: sl.no, k, w: T.w, h: T.h, type: T.type, sheetW: sheet[0], sheetH: sheet[1], M, c0: act ? { sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { sx: 1, sy: 1, ox: 0, oy: 0 }, done: false };
     pcSt.tests.push(t); if (pcSt.tests.length > 40) pcSt.tests = pcSt.tests.slice(-40);
     sl.next = i + 1; pcSt.selTest = t.id; pcPersist(); pcRefresh();
     showToast(`Prueba ${i + 1}/${n} (${pcOrient(T.w, T.h)} ${T.w}×${T.h}): imprime al 100 % y mide`, 'info', 2800);
@@ -5816,16 +5833,17 @@ ctx.restore();
     sfx.click();
     const tid = pcQ(root, 'tsel').value, t = pcSt.tests.find(x => x.id === tid && !x.done);
     if (!t) { showToast('Primero imprime una prueba', 'error'); return; }
-    const PT = pcNum(pcQ(root, 'mt')), PB = pcNum(pcQ(root, 'mb')), PL = pcNum(pcQ(root, 'ml')), PR = pcNum(pcQ(root, 'mr'));
-    if ([PT, PB, PL, PR].some(v => v === null || v < 0 || v > 5)) { showToast('Escribe los 4 valores medidos (cm)', 'error'); return; }
+    const PT = pcNum(pcQ(root, 'mt')), SY = pcNum(pcQ(root, 'mb')), PL = pcNum(pcQ(root, 'ml')), SX = pcNum(pcQ(root, 'mr'));
+    if ([PT, SY, PL, SX].some(v => v === null || v < 0 || v > 150)) { showToast('Escribe los 4 valores medidos (cm)', 'error'); return; }
     const c0 = t.c0;
     const dl = (t.M - c0.ox) / c0.sx, dr = (t.w - t.M - c0.ox) / c0.sx;
     const dt = (t.M - c0.oy) / c0.sy, db = (t.h - t.M - c0.oy) / c0.sy;
-    const sx = ((t.sheetW - PR) - PL) / (dr - dl), ox = PL - sx * dl;
-    const sy = ((t.sheetH - PB) - PT) / (db - dt), oy = PT - sy * dt;
-    if (!(sx > 0.9 && sx < 1.1 && sy > 0.9 && sy < 1.1)) { showToast('Medidas raras: revisa que midas desde el borde de la hoja', 'error', 2500); return; }
-    const ex = pcExpected(t), dev = Math.max(Math.abs(PT - ex.top), Math.abs(PB - ex.bottom), Math.abs(PL - ex.left), Math.abs(PR - ex.right)) * 10;
-    const pr = pcEnsure(t.w, t.h);
+    // Escala = distancia medida entre rayitas / distancia dibujada; desplazamiento = borde de hoja → rayita (arriba/izq.)
+    const sx = SX / (dr - dl), ox = PL - sx * dl;
+    const sy = SY / (db - dt), oy = PT - sy * dt;
+    if (!(sx > 0.9 && sx < 1.1 && sy > 0.9 && sy < 1.1)) { showToast('Medidas raras: Alto y Ancho van de rayita a rayita', 'error', 2800); return; }
+    const ex = pcExpected(t), dev = Math.max(Math.abs(PT - ex.top), Math.abs(SY - ex.bottom), Math.abs(PL - ex.left), Math.abs(SX - ex.right)) * 10;
+    const pr = pcEnsure(t.w, t.h, t.type);
     pr.sx = sx; pr.sy = sy; pr.ox = ox; pr.oy = oy;
     t.done = true; pcSt.enabled = true; pcPersist();
     document.querySelectorAll('.pcp').forEach(rt => ['mt', 'mb', 'ml', 'mr'].forEach(id => { pcQ(rt, id).value = ''; }));
@@ -5857,7 +5875,7 @@ ctx.restore();
         pcPersist(); pcRefresh();
       }
       else if (a === 'name') {
-        const T = pcTarget(), r = pcFind(T.w, T.h), n = t.value.trim();
+        const T = pcTarget(), r = pcFind(T.w, T.h, T.type), n = t.value.trim();
         if (r.kind === 'exact' && n) { r.preset.name = n; pcPersist(); }
         pcRefresh();
       }
@@ -7218,10 +7236,12 @@ ctx.restore();
     $('pdfDuplexOdd').classList.remove('active');
     $('pdfDuplexEven').classList.remove('active');
     const m = $('pdfPrintModal'); m.classList.add('show'); setTimeout(() => m.classList.add('visible'), 10);
+    pcDocCtx = null; pcRefresh();
+    pdfReaderState.pdfDoc.getPage(1).then(pg => { const v = pg.getViewport({ scale: 1 }); pcDocCtx = { w: v.width / 72 * 2.54, h: v.height / 72 * 2.54 }; pcRefresh(); }).catch(() => {});
     updatePdfPrintPreview();
   }
   function closePdfPrintModal() {
-    const m = $('pdfPrintModal'); m.classList.remove('visible');
+    const m = $('pdfPrintModal'); m.classList.remove('visible'); pcDocCtx = null; pcRefresh();
     setTimeout(() => m.classList.remove('show'), 250);
   }
   async function performPdfPrint() {
@@ -7243,7 +7263,7 @@ ctx.restore();
       printArea.style.setProperty('--pw', `${ptW}pt`);
       printArea.style.setProperty('--ph', `${vp1.height.toFixed(4)}pt`);
       const pcWc = vp1.width / 72 * 2.54, pcHc = vp1.height / 72 * 2.54;
-      const pcC = pcGet(pcWc, pcHc, true), pcOn = pcActive(pcC);
+      const pcC = pcGet(pcWc, pcHc, 'sheet'), pcOn = pcActive(pcC);
       const pcBx = pcOn ? pcBox(pcWc, pcHc, [pcWc, pcHc]) : null;
       if (pcBx) {
         printArea.style.setProperty('--pw', `${(pcBx.w / 2.54 * 72).toFixed(4)}pt`);
