@@ -5536,46 +5536,75 @@ ctx.restore();
   const pcKey = (w, h) => w.toFixed(1) + 'x' + h.toFixed(1);
   const pcKeyLabel = (k) => k.replace('x', '×');
   const pcId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const PC_NAMES = { carta: 'Carta', oficio: 'Oficio', legal: 'Legal', a4: 'A4', a3: 'A3', a2: 'A2', tabloide: 'Tabloide', '10x15': '10×15' };
+  const pcOrient = (w, h) => (w > h ? 'horizontal' : 'vertical');
+  function pcAutoName(w, h) {
+    let nm = 'Hoja'; const lo = Math.min(w, h), hi = Math.max(w, h);
+    for (const [id, d] of Object.entries(PAPERS)) { if (Math.abs(Math.min(...d) - lo) <= 0.15 && Math.abs(Math.max(...d) - hi) <= 0.15) { nm = PC_NAMES[id] || id; break; } }
+    return `${nm} ${pcOrient(w, h)} ${w}×${h}`;
+  }
+  const pcParseKey = (k) => k.split('x').map(parseFloat);
   function pcLoad() {
     let st = null;
     try { st = JSON.parse(localStorage.getItem(PC_KEY)); } catch (_) { st = null; }
     if (!st || !Array.isArray(st.presets)) {
-      st = { v: 2, enabled: true, active: 'auto', presets: [], last: null };
+      st = { v: 4, enabled: true, active: 'auto', presets: [], tests: [], slots: {}, selTest: null, target: { size: 'cur', orient: 'cur', cw: 21.3, ch: 27.6 } };
       let old = {};
       try { old = JSON.parse(localStorage.getItem(PC_KEY_OLD)) || {}; } catch (_) { old = {}; }
-      if (old.__last) st.last = old.__last;
       Object.keys(old).forEach(k => {
         const c = old[k];
         if (k === '__last' || !c || typeof c.sx !== 'number') return;
         st.presets.push({ id: pcId(), name: k === '21.3x27.6' ? 'Carta 21.3×27.6 (Mopria)' : 'Hoja ' + pcKeyLabel(k), key: k, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy });
       });
+      if (!st.presets.length) st.presets.push({ id: pcId(), name: 'Carta 21.3×27.6 (Mopria)', key: '21.3x27.6', sx: 0.987, sy: 0.985, ox: -0.05, oy: 0.02 });
     }
-    if (!st.presets.length) st.presets.push({ id: pcId(), name: 'Carta 21.3×27.6 (Mopria)', key: '21.3x27.6', sx: 0.987, sy: 0.985, ox: -0.05, oy: 0.02 });
+    // Migración v3 (preset con varias calibraciones) -> v4 (un preset por hoja+orientación)
+    const flat = [];
+    st.presets.forEach(x => {
+      if (x.cal && typeof x.cal === 'object') {
+        const ents = Object.entries(x.cal);
+        ents.forEach(([k, c], i) => { const d = pcParseKey(k); flat.push({ id: i === 0 ? x.id : pcId(), name: ents.length === 1 ? x.name : pcAutoName(d[0], d[1]), key: k, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy }); });
+      } else if (x.key && typeof x.sx === 'number') flat.push({ id: x.id, name: x.name, key: x.key, sx: x.sx, sy: x.sy, ox: x.ox, oy: x.oy });
+    });
+    st.presets = flat; st.v = 4;
+    delete st.last; delete st.sheet; delete st.sheetNo;
+    if (!Array.isArray(st.tests)) st.tests = [];
+    if (!st.slots || typeof st.slots !== 'object') st.slots = {};
+    if (!st.target) st.target = { size: 'cur', orient: 'cur', cw: 21.3, ch: 27.6 };
     if (st.active !== 'auto' && !st.presets.some(x => x.id === st.active)) st.active = 'auto';
     if (typeof st.enabled !== 'boolean') st.enabled = true;
     return st;
   }
   let pcSt = pcLoad();
   function pcPersist() { try { localStorage.setItem(PC_KEY, JSON.stringify(pcSt)); } catch (_) {} }
-  // Preset que corresponde a una hoja. strict = solo si su tamaño coincide (PDF).
-  function pcCur(w, h, strict) {
-    const k = pcKey(w, h);
+  // Calibración para una hoja (tamaño + orientación). Un preset = una hoja en una orientación.
+  //  exact = preset de esa hoja; rot = solo existe la orientación contraria (estimación: escalas X/Y intercambiadas);
+  //  none = sin calibrar. Un preset fijado a mano solo se usa si es de esta hoja; si no, se busca el automático.
+  function pcFind(w, h) {
+    const k = pcKey(w, h), kr = pcKey(h, w);
+    let pinMiss = false;
     if (pcSt.active !== 'auto') {
-      const x = pcSt.presets.find(q => q.id === pcSt.active);
-      if (x && (!strict || x.key === k)) return x;
-      if (!strict) return null;
+      const a = pcSt.presets.find(x => x.id === pcSt.active);
+      if (a && a.key === k) return { preset: a, kind: 'exact', cal: a, k };
+      pinMiss = true;
     }
-    return pcSt.presets.find(q => q.key === k) || null;
+    let q = pcSt.presets.find(x => x.key === k);
+    if (q) return { preset: q, kind: 'exact', cal: q, k, pinMiss };
+    q = pcSt.presets.find(x => x.key === kr);
+    if (q) return { preset: q, kind: 'rot', cal: { sx: q.sy, sy: q.sx, ox: 0, oy: 0 }, k, from: kr, pinMiss };
+    return { preset: null, kind: 'none', cal: null, k, pinMiss };
   }
-  function pcGet(w, h, strict) {
-    const x = pcCur(w, h, strict), k = pcKey(w, h);
-    return (x && pcSt.enabled) ? { k, on: true, sx: x.sx, sy: x.sy, ox: x.ox, oy: x.oy } : { k, on: false, sx: 1, sy: 1, ox: 0, oy: 0 };
+  function pcGet(w, h) {
+    const r = pcFind(w, h);
+    return (r.cal && pcSt.enabled) ? { k: r.k, on: true, kind: r.kind, sx: r.cal.sx, sy: r.cal.sy, ox: r.cal.ox, oy: r.cal.oy } : { k: r.k, on: false, kind: r.kind, sx: 1, sy: 1, ox: 0, oy: 0 };
   }
   const pcActive = (c) => c.on && (c.sx !== 1 || c.sy !== 1 || c.ox !== 0 || c.oy !== 0);
-  function pcSheet(w, h, isEditor) {
+  // Hoja real de papel: carta y legal tienen tamaño real conocido; el resto usa el tamaño del editor.
+  function pcSheet(w, h, isEditor, type) {
+    const t = type || state.paperType;
     if (isEditor) {
-      const sh = state.paperType === 'carta' ? [21.59, 27.94] : state.paperType === 'legal' ? [21.59, 35.56] : null;
-      if (sh) return state.orientation === 'horizontal' ? [sh[1], sh[0]] : sh;
+      const sh = t === 'carta' ? [21.59, 27.94] : t === 'legal' ? [21.59, 35.56] : null;
+      if (sh) return w > h ? [sh[1], sh[0]] : sh;
     }
     return [w, h];
   }
@@ -5591,97 +5620,139 @@ ctx.restore();
     g.drawImage(src, (-c.ox / c.sx) * pX, (-c.oy / c.sy) * pY, src.width / c.sx, src.height / c.sy);
     return out;
   }
-  function pcSizeRule(p) {
-    if (state.paperType === 'carta') return state.orientation === 'horizontal' ? 'letter landscape' : 'letter';
-    if (state.paperType === 'legal') return state.orientation === 'horizontal' ? 'legal landscape' : 'legal';
-    return `${(p.w / 2.54).toFixed(4)}in ${(p.h / 2.54).toFixed(4)}in`;
+  function pcSizeRule(w, h, type) {
+    if (type === 'carta') return w > h ? 'letter landscape' : 'letter';
+    if (type === 'legal') return w > h ? 'legal landscape' : 'legal';
+    return `${(w / 2.54).toFixed(4)}in ${(h / 2.54).toFixed(4)}in`;
   }
-  // Preset que se edita: el resuelto para la hoja actual; si no hay, se crea uno para este tamaño.
-  function pcEnsure() {
-    const p = getPaperCm(); let cur = pcCur(p.w, p.h, false);
-    if (!cur) {
-      const k = pcKey(p.w, p.h);
-      cur = { id: pcId(), name: 'Hoja ' + pcKeyLabel(k), key: k, sx: 1, sy: 1, ox: 0, oy: 0 };
-      pcSt.presets.push(cur);
-    }
-    return cur;
+  // Hoja que se está calibrando en el panel (puede ser distinta a la del documento).
+  function pcTarget() {
+    const t = pcSt.target, cur = getPaperCm(); let w, h, type;
+    if (t.size === 'custom') { w = Number(t.cw) || 21.3; h = Number(t.ch) || 27.6; type = 'custom'; }
+    else if (t.size !== 'cur' && PAPERS[t.size]) { [w, h] = PAPERS[t.size]; type = t.size; }
+    else { w = cur.w; h = cur.h; type = state.paperType; }
+    const lo = Math.min(w, h), hi = Math.max(w, h);
+    if (t.orient === 'v') { w = lo; h = hi; }
+    else if (t.orient === 'h') { w = hi; h = lo; }
+    else if (t.size !== 'cur') { if (state.orientation === 'horizontal') { w = hi; h = lo; } else { w = lo; h = hi; } }
+    return { w, h, type };
   }
+  // Preset editable de una hoja: se crea (con nombre automático) a partir de la estimación o de cero.
+  function pcEnsure(w, h) {
+    const r = pcFind(w, h);
+    if (r.kind === 'exact') return r.preset;
+    const c = r.cal || { sx: 1, sy: 1, ox: 0, oy: 0 };
+    const np = { id: pcId(), name: pcAutoName(w, h), key: r.k, sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy };
+    pcSt.presets.push(np); return np;
+  }
+  // Huecos de prueba por hoja: cada prueba usa un lugar distinto a lo largo de los bordes.
+  const PC_STEP = 2, PC_START = 3, PC_TICK = 1.2;
+  const pcSlots = (w, h) => Math.max(1, Math.min(12, Math.floor((w - 2 * PC_START) / PC_STEP) + 1, Math.floor((h - 2 * PC_START) / PC_STEP) + 1));
+  const pcSlotSt = (k) => (pcSt.slots[k] || (pcSt.slots[k] = { next: 0, no: 1 }));
+  const pcExpected = (t) => ({ top: t.M, left: t.M, bottom: t.sheetH - (t.h - t.M), right: t.sheetW - (t.w - t.M) });
+  const PCP_SIZES = '<option value="cur">Hoja del documento</option>' + Object.keys(PAPERS).map(id => `<option value="${id}">${PC_NAMES[id] || id} ${PAPERS[id][0]}×${PAPERS[id][1]}</option>`).join('') + '<option value="custom">Personalizada…</option>';
+
   /* ---- Panel compacto (se monta en cada .pcp-host: impresión y editor de póster) ---- */
   const PCP_HTML = `<div class="pcp">
     <div class="pcp-top"><select class="pcp-i" data-pc="sel" aria-label="Preset de compensación"></select><button type="button" class="pcp-b" data-pc="tog"></button></div>
     <div class="pcp-info" data-pc="info"></div>
-    <details class="pcp-d"><summary>Calibrar / editar preset</summary><div class="pcp-bd">
-      <div class="pcp-r"><input type="text" class="pcp-i" data-pc="name" placeholder="Nombre del preset"><button type="button" class="pcp-b" data-pc="new" title="Nuevo preset">+ Nuevo</button><button type="button" class="pcp-b" data-pc="del" title="Eliminar preset">Eliminar</button></div>
+    <details class="pcp-d"><summary>Calibrar hojas / editar preset</summary><div class="pcp-bd">
+      <div class="pcp-sec" style="margin-top:2px">Hoja a calibrar (cada hoja + orientación = un preset):</div>
+      <div class="pcp-r"><select class="pcp-i" data-pc="tsz" aria-label="Tamaño de hoja">${PCP_SIZES}</select><select class="pcp-i" data-pc="tor" aria-label="Orientación"><option value="cur">Orient. del documento</option><option value="v">Vertical</option><option value="h">Horizontal</option></select></div>
+      <div class="pcp-r" data-pc="cust" style="display:none"><input type="text" inputmode="decimal" class="pcp-i" data-pc="tcw" placeholder="Ancho cm"><input type="text" inputmode="decimal" class="pcp-i" data-pc="tch" placeholder="Alto cm"></div>
+      <div class="pcp-info" data-pc="tinfo"></div>
+      <div class="pcp-r"><input type="text" class="pcp-i" data-pc="name" placeholder="Nombre del preset"><button type="button" class="pcp-b" data-pc="del" title="Eliminar el preset de esta hoja">Eliminar</button></div>
       <div class="pcp-g">
         <div><label>X (mm)</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="ox"></div>
         <div><label>Y (mm)</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="oy"></div>
         <div><label>Esc. X %</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="sx"></div>
         <div><label>Esc. Y %</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="sy"></div>
       </div>
-      <div class="pcp-r"><button type="button" class="pcp-b fl" data-pc="test">1) Hoja de prueba</button></div>
-      <div class="pcp-sec">Mide con regla del borde de la hoja al centro de la línea (cm):</div>
+      <div class="pcp-r"><button type="button" class="pcp-b fl" data-pc="test">1) Imprimir prueba</button><button type="button" class="pcp-b" data-pc="newsheet" title="Pon otra hoja en blanco y empieza desde la prueba 1">Hoja nueva</button></div>
+      <div class="pcp-sec">2) Mide con regla (cm) del borde de la hoja a cada rayita:</div>
+      <div class="pcp-r"><select class="pcp-i" data-pc="tsel" aria-label="Prueba a medir"></select></div>
       <div class="pcp-g">
         <div><label>Arriba</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mt"></div>
         <div><label>Abajo</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mb"></div>
         <div><label>Izq.</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="ml"></div>
         <div><label>Der.</label><input type="text" inputmode="decimal" class="pcp-i" data-pc="mr"></div>
       </div>
-      <div class="pcp-r"><button type="button" class="pcp-b fl" data-pc="calc">2) Calcular compensación</button></div>
+      <div class="pcp-r"><button type="button" class="pcp-b fl" data-pc="calc">3) Calcular y guardar preset</button></div>
       <details class="pcp-n"><summary>Ayuda</summary>
         <p><b>Tamaño real:</b> en el diálogo de impresión elige «Tamaño real / 100 %» y desactiva «Ajustar a página».</p>
-        <p>Los valores son lo que hace tu impresora (negativo = corre el dibujo hacia arriba/izquierda); el editor dibuja al revés para cancelarlo. Cada preset guarda su compensación; «Automático» usa el preset calibrado para el tamaño de hoja actual. Tras calcular, vuelve a imprimir la hoja de prueba: los 4 márgenes deben salir de 1 cm. La zona no imprimible (~0.3–0.4 cm del borde) no se puede compensar.</p>
+        <p><b>Un preset por hoja y orientación:</b> elige la hoja (carta, oficio, personalizada…) y su orientación, imprime la prueba, mide y calcula: se crea o actualiza el preset de esa hoja. Repite para cada hoja y orientación que uses. Al imprimir, «Automático» elige solo el preset que coincide con la hoja y orientación del documento.</p>
+        <p><b>Pruebas:</b> cada prueba imprime 4 rayitas numeradas (arriba, abajo, izquierda, derecha) en un lugar distinto de la hoja; vuelve a meter la misma hoja para la siguiente. Los campos de medida muestran en gris el valor esperado.</p>
+        <p>Si solo existe la orientación contraria, se usa una estimación (escalas intercambiadas) hasta que calibres esa orientación. Negativo = la impresora corre el dibujo hacia arriba/izquierda; el editor dibuja al revés para cancelarlo. La zona no imprimible (~0.3–0.4 cm del borde) no se puede compensar.</p>
       </details>
     </div></details>
   </div>`;
-  const pcAll = (n) => document.querySelectorAll('.pcp [data-pc="' + n + '"]');
   const pcQ = (root, n) => root.querySelector('[data-pc="' + n + '"]');
   function pcMountAll() {
     document.querySelectorAll('.pcp-host').forEach(h => { if (!h.firstChild) h.innerHTML = PCP_HTML; });
     pcRefresh();
   }
+  const pcPending = () => pcSt.tests.filter(t => !t.done);
+  function pcStatus(r, w, h) {
+    const pn = r.preset ? r.preset.name : '';
+    let msg = `${w}×${h} cm (${pcOrient(w, h)})`, warn = false;
+    if (r.kind === 'exact') msg += ` · ${pn} ✓`;
+    else if (r.kind === 'rot') { msg += ` · estimada desde ${pcKeyLabel(r.from)}: calibra esta orientación`; warn = true; }
+    else { msg += ' · sin calibrar: imprime una prueba'; warn = true; }
+    if (r.pinMiss) { msg += ' · el preset elegido es de otra hoja'; warn = true; }
+    return { msg, warn };
+  }
   function pcRefresh() {
-    const p = getPaperCm(), s = pcSheet(p.w, p.h, true), k = pcKey(p.w, p.h), cur = pcCur(p.w, p.h, false);
-    let msg = `Hoja ${p.w}×${p.h} cm`, warn = false;
-    if (s[0] !== p.w || s[1] !== p.h) msg += ` (real ${s[0]}×${s[1]})`;
-    if (!cur) { msg += ' · sin preset: toca «+ Nuevo» y calibra'; warn = true; }
-    else { msg += ` · ${cur.name}`; if (cur.key !== k) { msg += ` (calibrado p/ ${pcKeyLabel(cur.key)})`; warn = true; } }
-    const v = cur || { ox: 0, oy: 0, sx: 1, sy: 1 };
+    const doc = getPaperCm(), rd = pcFind(doc.w, doc.h), sd = pcStatus(rd, doc.w, doc.h);
+    const T = pcTarget(), rt = pcFind(T.w, T.h), st = pcStatus(rt, T.w, T.h), sheet = pcSheet(T.w, T.h, true, T.type);
+    const v = rt.cal || { ox: 0, oy: 0, sx: 1, sy: 1 };
+    const n = pcSlots(T.w, T.h), used = pcSlotSt(rt.k).next;
+    const pend = pcPending();
+    if (!pend.some(t => t.id === pcSt.selTest)) pcSt.selTest = pend.length ? pend[pend.length - 1].id : null;
+    const selT = pend.find(t => t.id === pcSt.selTest), ex = selT ? pcExpected(selT) : null;
     document.querySelectorAll('.pcp').forEach(root => {
       const sel = pcQ(root, 'sel'); sel.innerHTML = '';
-      const o0 = document.createElement('option'); o0.value = 'auto'; o0.textContent = 'Automático (según tamaño de hoja)'; sel.appendChild(o0);
-      pcSt.presets.forEach(x => { const o = document.createElement('option'); o.value = x.id; o.textContent = `${x.name} · ${pcKeyLabel(x.key)}`; sel.appendChild(o); });
+      const o0 = document.createElement('option'); o0.value = 'auto'; o0.textContent = 'Automático (según hoja)'; sel.appendChild(o0);
+      pcSt.presets.forEach(x => { const o = document.createElement('option'); o.value = x.id; o.textContent = x.name; sel.appendChild(o); });
       sel.value = pcSt.active;
-      const info = pcQ(root, 'info'); info.textContent = msg; info.classList.toggle('warn', warn);
+      const info = pcQ(root, 'info'); info.textContent = 'Documento: ' + sd.msg + (!pcSt.enabled ? ' · (apagada)' : ''); info.classList.toggle('warn', sd.warn && pcSt.enabled);
       const tog = pcQ(root, 'tog'); tog.textContent = pcSt.enabled ? 'Activada' : 'Desactivada'; tog.classList.toggle('on', pcSt.enabled);
-      const nm = pcQ(root, 'name'); if (document.activeElement !== nm) nm.value = cur ? cur.name : ''; nm.disabled = !cur;
-      pcQ(root, 'del').disabled = !cur;
-      const set = (n, val) => { const el = pcQ(root, n); if (document.activeElement !== el) el.value = val; };
-      set('ox', (v.ox * 10).toFixed(2)); set('oy', (v.oy * 10).toFixed(2));
-      set('sx', (v.sx * 100).toFixed(2)); set('sy', (v.sy * 100).toFixed(2));
+      const tsz = pcQ(root, 'tsz'); if (document.activeElement !== tsz) tsz.value = pcSt.target.size;
+      const tor = pcQ(root, 'tor'); if (document.activeElement !== tor) tor.value = pcSt.target.orient;
+      pcQ(root, 'cust').style.display = pcSt.target.size === 'custom' ? 'flex' : 'none';
+      const setv = (nme, val) => { const el = pcQ(root, nme); if (document.activeElement !== el) el.value = val; };
+      setv('tcw', pcSt.target.cw); setv('tch', pcSt.target.ch);
+      const ti = pcQ(root, 'tinfo'); ti.textContent = 'Calibrando: ' + st.msg; ti.classList.toggle('warn', st.warn);
+      const nm = pcQ(root, 'name'); if (document.activeElement !== nm) nm.value = rt.kind === 'exact' ? rt.preset.name : ''; nm.disabled = rt.kind !== 'exact';
+      pcQ(root, 'del').disabled = rt.kind !== 'exact';
+      setv('ox', (v.ox * 10).toFixed(2)); setv('oy', (v.oy * 10).toFixed(2));
+      setv('sx', (v.sx * 100).toFixed(2)); setv('sy', (v.sy * 100).toFixed(2));
+      const tb = pcQ(root, 'test'); tb.textContent = used >= n ? 'Hoja llena: usa «Hoja nueva»' : `1) Imprimir prueba ${used + 1}/${n}`;
+      const ts = pcQ(root, 'tsel'); ts.innerHTML = '';
+      if (!pend.length) { const o = document.createElement('option'); o.value = ''; o.textContent = '— imprime una prueba primero —'; ts.appendChild(o); }
+      pend.forEach(t => { const o = document.createElement('option'); o.value = t.id; o.textContent = `Prueba ${t.n} · hoja ${t.s} · ${pcOrient(t.w, t.h)} ${pcKeyLabel(t.k)}`; ts.appendChild(o); });
+      if (selT) ts.value = selT.id;
+      [['mt', 'top'], ['mb', 'bottom'], ['ml', 'left'], ['mr', 'right']].forEach(([id, side]) => { pcQ(root, id).placeholder = ex ? ex[side].toFixed(2) : ''; });
     });
   }
   const pcNum = (el) => { const v = parseFloat(String(el && el.value).replace(',', '.')); return isFinite(v) ? v : null; };
   function pcReadFields(root) {
-    const cur = pcEnsure();
+    const T = pcTarget(), cur = pcEnsure(T.w, T.h);
     const ox = pcNum(pcQ(root, 'ox')), oy = pcNum(pcQ(root, 'oy')), sx = pcNum(pcQ(root, 'sx')), sy = pcNum(pcQ(root, 'sy'));
     if (ox !== null) cur.ox = ox / 10; if (oy !== null) cur.oy = oy / 10;
     if (sx !== null) cur.sx = Math.min(1.1, Math.max(0.9, sx / 100)); if (sy !== null) cur.sy = Math.min(1.1, Math.max(0.9, sy / 100));
     pcPersist(); pcRefresh();
   }
   function pcSetOn(on) { pcSt.enabled = on; pcPersist(); pcRefresh(); }
-  function pcNew(root) {
-    const p = getPaperCm(), cur = pcCur(p.w, p.h, false), b = cur || { sx: 1, sy: 1, ox: 0, oy: 0 };
-    const np = { id: pcId(), name: `Preset ${pcSt.presets.length + 1}`, key: pcKey(p.w, p.h), sx: b.sx, sy: b.sy, ox: b.ox, oy: b.oy };
-    pcSt.presets.push(np); pcSt.active = np.id; pcPersist(); pcRefresh();
-    showToast('Preset creado: ponle nombre y calibra', 'info', 1800);
-    try { const n = pcQ(root, 'name'); n.focus(); n.select(); } catch (_) {}
-  }
   function pcDelete() {
-    const p = getPaperCm(), cur = pcCur(p.w, p.h, false); if (!cur) return;
-    if (!window.confirm(`¿Eliminar el preset «${cur.name}»?`)) return;
-    pcSt.presets = pcSt.presets.filter(x => x.id !== cur.id);
-    if (pcSt.active === cur.id) pcSt.active = 'auto';
+    const T = pcTarget(), r = pcFind(T.w, T.h); if (r.kind !== 'exact') return;
+    if (!window.confirm(`¿Eliminar el preset «${r.preset.name}»?`)) return;
+    pcSt.presets = pcSt.presets.filter(x => x.id !== r.preset.id);
+    if (pcSt.active === r.preset.id) pcSt.active = 'auto';
     pcPersist(); pcRefresh(); showToast('Preset eliminado', 'info');
+  }
+  function pcNewSheet() {
+    const T = pcTarget(), sl = pcSlotSt(pcKey(T.w, T.h)); sl.next = 0; sl.no += 1;
+    pcPersist(); pcRefresh(); showToast('Hoja nueva: la siguiente prueba será la 1', 'info', 1800);
   }
   async function pcRunPrint(cvs, box, sizeRule) {
     const printArea = $('printArea'), oldHTML = printArea.innerHTML;
@@ -5714,44 +5785,52 @@ ctx.restore();
   }
   async function pcTestPrint() {
     sfx.click();
-    const p = getPaperCm(), c = pcGet(p.w, p.h), act = pcActive(c), sheet = pcSheet(p.w, p.h, true);
-    const M = 1, k = 300 / 2.54;
-    const cv = document.createElement('canvas'); cv.width = Math.round(p.w * k); cv.height = Math.round(p.h * k);
+    const T = pcTarget(), c = pcGet(T.w, T.h), act = pcActive(c), sheet = pcSheet(T.w, T.h, true, T.type), k = pcKey(T.w, T.h);
+    const n = pcSlots(T.w, T.h), sl = pcSlotSt(k), i = sl.next;
+    if (i >= n) { showToast('Hoja llena: toca «Hoja nueva» y pon otra hoja', 'info', 2500); pcRefresh(); return; }
+    const M = 1, kk = 300 / 2.54;
+    const cv = document.createElement('canvas'); cv.width = Math.round(T.w * kk); cv.height = Math.round(T.h * kk);
     const g = cv.getContext('2d');
     g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
-    g.strokeStyle = '#000'; g.lineWidth = 0.04 * k;
-    g.strokeRect(M * k, M * k, (p.w - 2 * M) * k, (p.h - 2 * M) * k);
-    const cx = p.w / 2, cy = p.h / 2;
-    g.lineWidth = 0.03 * k; g.beginPath();
-    g.moveTo((cx - 5) * k, cy * k); g.lineTo((cx + 5) * k, cy * k);
-    for (let i = 0; i <= 10; i++) { const x = (cx - 5 + i) * k; g.moveTo(x, (cy - 0.25) * k); g.lineTo(x, (cy + 0.25) * k); }
+    const xi = n === 1 ? T.w / 2 : PC_START + i * PC_STEP, yi = n === 1 ? T.h / 2 : PC_START + i * PC_STEP, hl = PC_TICK / 2;
+    g.strokeStyle = '#000'; g.fillStyle = '#000'; g.lineWidth = 0.04 * kk; g.lineCap = 'butt';
+    g.beginPath();
+    g.moveTo(M * kk, (yi - hl) * kk); g.lineTo(M * kk, (yi + hl) * kk);                    // izquierda
+    g.moveTo((T.w - M) * kk, (yi - hl) * kk); g.lineTo((T.w - M) * kk, (yi + hl) * kk);    // derecha
+    g.moveTo((xi - hl) * kk, M * kk); g.lineTo((xi + hl) * kk, M * kk);                    // arriba
+    g.moveTo((xi - hl) * kk, (T.h - M) * kk); g.lineTo((xi + hl) * kk, (T.h - M) * kk);    // abajo
     g.stroke();
-    g.fillStyle = '#000'; g.textAlign = 'center'; g.font = `${0.42 * k}px sans-serif`;
-    g.fillText('Hoja de prueba · marco a 1 cm del borde · regla de 10 cm', cx * k, (cy - 0.7) * k);
-    g.fillText('Mide arriba / abajo / izquierda / derecha desde el borde de la hoja', cx * k, (cy + 1.2) * k);
-    const box = act ? pcBox(p.w, p.h, sheet) : { w: p.w, h: p.h };
-    const out = act ? pcTransform(cv, c, p.w, p.h, box) : cv;
-    pcSt.last = { w: p.w, h: p.h, sheetW: sheet[0], sheetH: sheet[1], M, k: c.k, c0: act ? { sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { sx: 1, sy: 1, ox: 0, oy: 0 } };
-    pcPersist();
-    showToast('Imprime al 100 % y luego mide los 4 márgenes', 'info', 2500);
-    await pcRunPrint([out], box, pcSizeRule(p));
+    g.font = `${0.35 * kk}px sans-serif`; g.textBaseline = 'middle'; const lab = String(i + 1);
+    g.textAlign = 'left'; g.fillText(lab, (M + 0.15) * kk, yi * kk);
+    g.textAlign = 'right'; g.fillText(lab, (T.w - M - 0.15) * kk, yi * kk);
+    g.textAlign = 'center'; g.fillText(lab, xi * kk, (M + 0.4) * kk); g.fillText(lab, xi * kk, (T.h - M - 0.4) * kk);
+    const box = act ? pcBox(T.w, T.h, sheet) : { w: T.w, h: T.h };
+    const out = act ? pcTransform(cv, c, T.w, T.h, box) : cv;
+    const t = { id: pcId(), n: i + 1, s: sl.no, k, w: T.w, h: T.h, sheetW: sheet[0], sheetH: sheet[1], M, c0: act ? { sx: c.sx, sy: c.sy, ox: c.ox, oy: c.oy } : { sx: 1, sy: 1, ox: 0, oy: 0 }, done: false };
+    pcSt.tests.push(t); if (pcSt.tests.length > 40) pcSt.tests = pcSt.tests.slice(-40);
+    sl.next = i + 1; pcSt.selTest = t.id; pcPersist(); pcRefresh();
+    showToast(`Prueba ${i + 1}/${n} (${pcOrient(T.w, T.h)} ${T.w}×${T.h}): imprime al 100 % y mide`, 'info', 2800);
+    await pcRunPrint([out], box, pcSizeRule(T.w, T.h, T.type));
   }
   function pcCompute(root) {
     sfx.click();
-    const L = pcSt.last;
-    if (!L) { showToast('Primero imprime la hoja de prueba', 'error'); return; }
+    const tid = pcQ(root, 'tsel').value, t = pcSt.tests.find(x => x.id === tid && !x.done);
+    if (!t) { showToast('Primero imprime una prueba', 'error'); return; }
     const PT = pcNum(pcQ(root, 'mt')), PB = pcNum(pcQ(root, 'mb')), PL = pcNum(pcQ(root, 'ml')), PR = pcNum(pcQ(root, 'mr'));
-    if ([PT, PB, PL, PR].some(v => v === null || v < 0 || v > 5)) { showToast('Escribe los 4 márgenes medidos (cm)', 'error'); return; }
-    const c0 = L.c0;
-    const dl = (L.M - c0.ox) / c0.sx, dr = (L.w - L.M - c0.ox) / c0.sx;
-    const dt = (L.M - c0.oy) / c0.sy, db = (L.h - L.M - c0.oy) / c0.sy;
-    const sx = ((L.sheetW - PR) - PL) / (dr - dl), ox = PL - sx * dl;
-    const sy = ((L.sheetH - PB) - PT) / (db - dt), oy = PT - sy * dt;
+    if ([PT, PB, PL, PR].some(v => v === null || v < 0 || v > 5)) { showToast('Escribe los 4 valores medidos (cm)', 'error'); return; }
+    const c0 = t.c0;
+    const dl = (t.M - c0.ox) / c0.sx, dr = (t.w - t.M - c0.ox) / c0.sx;
+    const dt = (t.M - c0.oy) / c0.sy, db = (t.h - t.M - c0.oy) / c0.sy;
+    const sx = ((t.sheetW - PR) - PL) / (dr - dl), ox = PL - sx * dl;
+    const sy = ((t.sheetH - PB) - PT) / (db - dt), oy = PT - sy * dt;
     if (!(sx > 0.9 && sx < 1.1 && sy > 0.9 && sy < 1.1)) { showToast('Medidas raras: revisa que midas desde el borde de la hoja', 'error', 2500); return; }
-    const cur = pcEnsure();
-    cur.sx = sx; cur.sy = sy; cur.ox = ox; cur.oy = oy; cur.key = L.k;
-    pcSt.enabled = true; pcPersist(); pcRefresh();
-    showToast(`Guardado en «${cur.name}»`, 'info', 2000);
+    const ex = pcExpected(t), dev = Math.max(Math.abs(PT - ex.top), Math.abs(PB - ex.bottom), Math.abs(PL - ex.left), Math.abs(PR - ex.right)) * 10;
+    const pr = pcEnsure(t.w, t.h);
+    pr.sx = sx; pr.sy = sy; pr.ox = ox; pr.oy = oy;
+    t.done = true; pcSt.enabled = true; pcPersist();
+    document.querySelectorAll('.pcp').forEach(rt => ['mt', 'mb', 'ml', 'mr'].forEach(id => { pcQ(rt, id).value = ''; }));
+    pcRefresh();
+    showToast(`Preset «${pr.name}» guardado (error medido ${dev.toFixed(1)} mm). Imprime otra prueba para verificar.`, 'info', 3200);
   }
   function pcInit() {
     pcMountAll();
@@ -5760,9 +5839,9 @@ ctx.restore();
       const t = e.target.closest && e.target.closest('.pcp [data-pc]'); if (!t) return;
       const root = rootOf(t), a = t.dataset.pc;
       if (a === 'tog') pcSetOn(!pcSt.enabled);
-      else if (a === 'new') pcNew(root);
       else if (a === 'del') pcDelete();
       else if (a === 'test') pcTestPrint();
+      else if (a === 'newsheet') pcNewSheet();
       else if (a === 'calc') pcCompute(root);
     });
     document.addEventListener('change', (e) => {
@@ -5770,9 +5849,16 @@ ctx.restore();
       const root = rootOf(t), a = t.dataset.pc;
       if (['ox', 'oy', 'sx', 'sy'].includes(a)) pcReadFields(root);
       else if (a === 'sel') { pcSt.active = t.value; pcPersist(); pcRefresh(); }
+      else if (a === 'tsel') { pcSt.selTest = t.value; pcPersist(); pcRefresh(); }
+      else if (a === 'tsz') { pcSt.target.size = t.value; pcPersist(); pcRefresh(); }
+      else if (a === 'tor') { pcSt.target.orient = t.value; pcPersist(); pcRefresh(); }
+      else if (a === 'tcw' || a === 'tch') {
+        const v = pcNum(t); if (v !== null && v >= 5 && v <= 150) pcSt.target[a === 'tcw' ? 'cw' : 'ch'] = v;
+        pcPersist(); pcRefresh();
+      }
       else if (a === 'name') {
-        const p = getPaperCm(), cur = pcCur(p.w, p.h, false), n = t.value.trim();
-        if (cur && n) { cur.name = n; pcPersist(); }
+        const T = pcTarget(), r = pcFind(T.w, T.h), n = t.value.trim();
+        if (r.kind === 'exact' && n) { r.preset.name = n; pcPersist(); }
         pcRefresh();
       }
     });
